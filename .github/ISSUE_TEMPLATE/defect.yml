@@ -1,0 +1,51 @@
+name: Defect
+description: Something produced a wrong result. Record where it should have been caught, and what now covers it.
+title: "defect: "
+labels: ["defect"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the defect with synthetic or redacted examples only. Never paste real customer, contract or personal data into an issue. If real data is exposed, email privacy@arapsys.com instead (see SECURITY.md).
+  - type: textarea
+    id: observed
+    attributes:
+      label: What was observed
+      description: What was wrong, where it surfaced, and what it affected. Use IDs, offsets and counts, not content.
+    validations:
+      required: true
+  - type: dropdown
+    id: found-by
+    attributes:
+      label: Found by
+      options:
+        - Lawyer or customer review
+        - Automated test
+        - Eval set
+        - Monitoring or logs
+        - Code review
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: should-have-caught
+    attributes:
+      label: Where it should have been caught
+      description: The earliest point that could reasonably have stopped it.
+      options:
+        - Requirement or design
+        - Code review
+        - Unit or integration test
+        - Eval set
+        - Masking or gate check
+        - Operations or monitoring
+        - Not yet known
+    validations:
+      required: true
+  - type: textarea
+    id: covered-by
+    attributes:
+      label: Now covered by
+      description: The test or eval case that fails without the fix. Fill this in when the fix lands.
+    validations:
+      required: false
