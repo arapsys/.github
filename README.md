@@ -91,7 +91,7 @@ A pull request by a listed dependency bot (the `exempt-authors` input, by defaul
 
 ### security
 
-It runs four jobs, each its own check: `check` (`mise run check`, off with `mise-check: false`), `gitleaks`, `semgrep` and `trivy`. Its header explains the pins and the workarounds.
+It runs four jobs, each its own check: `check` (`mise run check`, off with `mise-check: false`), `gitleaks`, `semgrep` and `trivy`. `semgrep: false` and `trivy: false` skip a scanner for a pull request with nothing for it to scan, and its check still reports, as skipped, which satisfies a required check. Set these from the caller's own classification of the changed files, never by skipping the whole `security` call: the required `security / …` checks would then be missing, and the pull request would wait forever. `gitleaks` always runs, because secrets can arrive in any file. Its header explains the pins and the workarounds.
 
 ## Testing
 

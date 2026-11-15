@@ -104,5 +104,36 @@ run "fixture: an exec with no install before it is caught" "$work/exec.yml" \
 printf 'jobs:\n  trivy:\n    steps: [{run: trivy fs .}]\n' > "$work/noexec.yml"
 run "fixture: no mise exec at all is caught" "$work/noexec.yml" "none" uninstalled
 
+# switches <workflow>: one line per rule broken by the scanner switches:
+# semgrep and trivy each gated by an input of their own that defaults to
+# true, and gitleaks never gated by one. "ok" when all hold.
+switches() {
+  local out="" job cond def
+  for job in semgrep trivy; do
+    cond="$(yq -r ".jobs.$job.if // \"\"" "$1")" || { echo "yq failed"; return; }
+    def="$(yq -r ".on.workflow_call.inputs.$job.default" "$1")"
+    [[ "$cond" == *"inputs.$job"* ]] || out+="$job not gated by inputs.$job"$'\n'
+    [ "$def" = true ] || out+="$job input does not default to true"$'\n'
+  done
+  cond="$(yq -r '.jobs.gitleaks.if // ""' "$1")"
+  [[ "$cond" == *"inputs."* ]] && out+="gitleaks gated by an input"$'\n'
+  [ -n "$out" ] && printf '%s' "$out" || echo ok
+}
+run "security.yml: semgrep and trivy have switches, gitleaks has none" "$root/.github/workflows/security.yml" "ok" switches
+
+cat > "$work/switch.yml" <<'EOF'
+on:
+  workflow_call:
+    inputs:
+      semgrep: {type: boolean, default: false}
+      trivy: {type: boolean, default: true}
+jobs:
+  gitleaks: {if: inputs.gitleaks}
+  semgrep: {if: inputs.semgrep}
+  trivy: {}
+EOF
+run "fixture: broken switches are caught" "$work/switch.yml" \
+  "$(printf '%s\n' 'semgrep input does not default to true' 'trivy not gated by inputs.trivy' 'gitleaks gated by an input')" switches
+
 printf '\n%s passed, %s failed\n' "$pass" "$failures"
 [ "$failures" = 0 ]
