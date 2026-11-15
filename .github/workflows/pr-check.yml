@@ -39,9 +39,12 @@
 # issue URL), no "Part of #N" and no "No issue: <reason>" line. A closing
 # keyword is what lists the PR under the issue's Development section.
 #
-# A bot author (a login ending in [bot]) skips the Checks, provenance and
-# issue rules, which ask about a template a bot does not fill in. Its title
-# is still checked.
+# A dependency bot listed in the exempt-authors input (by default
+# renovate[bot] and dependabot[bot]) skips the Checks, provenance and issue
+# rules, which ask about a template it does not fill in. Its title is still
+# checked. Every other author, including any other bot such as an agent's
+# GitHub App, is checked in full: an agent's pull request is the one that
+# most needs its Checks section.
 #
 # Security-sensitive paths are listed in gitignore syntax in the calling
 # repository's paths-file, read from the base branch, so a pull request
@@ -68,6 +71,10 @@ on:
         description: Security-sensitive path list, gitignore syntax, read from the base branch.
         type: string
         default: .github/security-sensitive-paths
+      exempt-authors:
+        description: Space-separated logins that skip the template rules (Checks, provenance, issue). Dependency bots only; never an agent's app.
+        type: string
+        default: renovate[bot] dependabot[bot]
       size-ignore-file:
         description: Paths that don't count toward the size label, gitignore syntax, read from the base branch.
         type: string
@@ -120,6 +127,7 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          EXEMPT_AUTHORS: ${{ inputs.exempt-authors }}
           COMMITS_FILE: ${{ runner.temp }}/commits.txt
           FILES_FILE: ${{ runner.temp }}/files.txt
           PATHS_FILE: ${{ inputs.paths-file }}
@@ -262,9 +270,11 @@ jobs:
               "$risk" "$rule" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # The template's Checks section, for people and agents, not bots.
-          if [[ "$AUTHOR" == *"[bot]" ]]; then
-            echo "Bot author: Checks and provenance rules skipped."
+          # The template's Checks section, for everyone except the listed
+          # dependency bots. An unlisted bot, such as an agent's app, is
+          # checked in full.
+          if [[ " ${EXEMPT_AUTHORS-renovate[bot] dependabot[bot]} " == *" $AUTHOR "* ]]; then
+            echo "Exempt author $AUTHOR: Checks, provenance and issue rules skipped."
             exit "$fail"
           fi
           body="${BODY//$'\r'/}"
