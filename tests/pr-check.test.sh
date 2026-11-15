@@ -17,6 +17,11 @@ yq -r '.jobs.check.steps[] | select(.id == "check") | .run' \
 [ -s "$work/check.sh" ] || { echo "FAIL  the check step is empty"; exit 1; }
 
 printf '%s\n' '# test list' 'src/Gate/' 'tests/' 'docs/controls.md' > "$work/paths"
+printf '%s\n' '# size ignore' 'packages.lock.json' '*.g.cs' 'tests/synthetic/' '**/Migrations/' > "$work/size-ignore"
+
+# Per-file sizes for the next run: lines of "additions<TAB>deletions<TAB>path".
+# Empty means no files changed.
+SIZES=""
 
 good_title='docs(engineering): add practices review'
 all_ticked='## Summary
@@ -33,12 +38,16 @@ run() {
   local name="$1" want="$2" want_sensitive="$3"
   printf '%s\n' "$6" > "$work/files"
   printf '%s\n' "${7:-}" > "$work/commits"
+  printf '%s' "$SIZES" > "$work/sizes"
   : > "$work/output"
+  : > "$work/summary"
   (
     cd "$work" || exit 99
     TITLE="$4" BODY="$5" AUTHOR="${8:-someone}" \
     COMMITS_FILE="$work/commits" FILES_FILE="$work/files" \
     PATHS_FILE="${9:-paths}" GITHUB_OUTPUT="$work/output" \
+    SIZE_FILE="$work/sizes" SIZE_IGNORE_FILE="${SIZE_IGNORE:-size-ignore}" \
+    GITHUB_STEP_SUMMARY="$work/summary" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -135,6 +144,51 @@ issue "No issue: with no reason warns"                 yes "No issue:"
 issue "an example inside a comment warns"              yes "<!-- e.g. Closes #12 -->"
 issue "a keyword inside a word warns"                  yes "Encloses #12"
 issue "a bare #12 warns"                               yes "See #12"
+
+# Size: reported, never a failure.
+# size_case <name> <want label> <want warning: yes|no> <sizes> [author]
+size_case() {
+  SIZES="$4"
+  run "$1" pass - "$good_title" "Closes #1
+$all_ticked" "README.md" "" "${5:-someone}"
+  SIZES=""
+  local got got_warn=no
+  got="$(sed -n 's/^size=//p' "$work/output")"
+  grep -q '^::warning title=pr-check::This pull request is size/' "$work/log" && got_warn=yes
+  if [ "$got" = "$2" ] && [ "$got_warn" = "$3" ] && grep -q "Size: $2" "$work/summary"; then
+    pass=$((pass + 1)); printf 'ok    %s (%s, warning: %s)\n' "$1" "$2" "$3"
+  else
+    failures=$((failures + 1))
+    printf 'FAIL  %s\ngot:  %s warning=%s\nwant: %s warning=%s\n' "$1" "$got" "$got_warn" "$2" "$3"
+    sed 's/^/      /' "$work/log"
+  fi
+}
+T=$'\t'
+size_case "no files is size/S"                 size/S  no  ""
+size_case "100 lines is still size/S"          size/S  no  "60${T}40${T}src/A.cs"
+size_case "101 lines is size/M"                size/M  no  "60${T}41${T}src/A.cs"
+size_case "400 lines is still size/M"          size/M  no  "300${T}100${T}src/A.cs"
+size_case "401 lines is size/L and warns"      size/L  yes "300${T}101${T}src/A.cs"
+size_case "800 lines is still size/L"          size/L  yes "800${T}0${T}src/A.cs"
+size_case "801 lines is size/XL and warns"     size/XL yes "801${T}0${T}src/A.cs"
+size_case "lines add up across files"          size/M  no  "60${T}0${T}src/A.cs
+50${T}0${T}src/B.cs"
+size_case "a lock file is skipped"             size/S  no  "900${T}0${T}src/App/packages.lock.json
+10${T}0${T}src/A.cs"
+size_case "generated code is skipped"          size/S  no  "500${T}0${T}obj/Api.g.cs"
+size_case "synthetic fixtures are skipped"     size/S  no  "500${T}0${T}tests/synthetic/base.xml"
+size_case "a nested Migrations folder is skipped" size/S no "500${T}0${T}src/Data/Migrations/0001_Init.cs"
+size_case "a look-alike name is counted"       size/L  yes "500${T}0${T}tests/synthetic-old/base.xml"
+size_case "a binary file counts 0"             size/S  no  "0${T}0${T}docs/diagram.png"
+size_case "a renamed file counts its edits"    size/S  no  "3${T}2${T}src/New.cs"
+size_case "a bot still gets a size"            size/M  no  "200${T}0${T}src/A.cs" "renovate[bot]"
+SIZE_IGNORE=missing-ignore
+size_case "no ignore file counts everything"   size/XL yes "900${T}0${T}src/App/packages.lock.json"
+SIZE_IGNORE=""
+SIZES="5000${T}0${T}src/A.cs"
+run "an XL pull request still passes" pass - "$good_title" "Closes #1
+$all_ticked" "README.md"
+SIZES=""
 
 # Bots.
 run "a bot with no Checks section passes" pass - "build(deps): bump a package" "" "Directory.Packages.props" "" "renovate[bot]"

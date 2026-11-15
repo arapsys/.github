@@ -12,6 +12,14 @@
 #     and the "Generated content declared" box is unticked;
 #   - it touches a security-sensitive path and the "security-sensitive path"
 #     box is unticked.
+# It reports size, never failing because of it: added plus deleted lines
+# from the PR files API, skipping paths in the caller's size-ignore-file
+# (gitignore syntax, read from the base branch). It sets one label, size/S
+# (up to 100), size/M (up to 400), size/L (up to 800) or size/XL, writes the
+# count to the job summary, and warns at L and XL. The count matches the
+# caller's own scripts/pr-size.sh where it has one: the files API diffs
+# against the merge base, follows renames and gives binary files 0 lines.
+#
 # It warns, without failing, when the description references no issue:
 # no closing keyword (close, fix or resolve with #N, owner/repo#N or an
 # issue URL), no "Part of #N" and no "No issue: <reason>" line. A closing
@@ -46,8 +54,13 @@ on:
         description: Security-sensitive path list, gitignore syntax, read from the base branch.
         type: string
         default: .github/security-sensitive-paths
+      size-ignore-file:
+        description: Paths that don't count toward the size label, gitignore syntax, read from the base branch.
+        type: string
+        default: .github/pr-size-ignore
 
-# pull-requests: write is for the security-sensitive label and nothing else.
+# pull-requests: write is for the security-sensitive and size labels and
+# nothing else.
 # On a pull request from a fork the token stays read-only and the label
 # step warns instead.
 permissions:
@@ -59,12 +72,14 @@ jobs:
     name: pr-check
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the path list from the base branch
+      - name: Check out the path lists from the base branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-          sparse-checkout: ${{ inputs.paths-file }}
+          sparse-checkout: |
+            ${{ inputs.paths-file }}
+            ${{ inputs.size-ignore-file }}
           sparse-checkout-cone-mode: false
 
       - name: Read the pull request's commits and files
@@ -77,6 +92,8 @@ jobs:
           set -euo pipefail
           gh api --paginate "repos/$REPO/pulls/$NUMBER/commits" --jq '.[].commit.message' > "$RUNNER_TEMP/commits.txt"
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/files.txt"
+          # One line per file, under its new name: additions, deletions, path.
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | "\(.additions)\t\(.deletions)\t\(.filename)"' > "$RUNNER_TEMP/sizes.tsv"
 
       - name: Check
         id: check
@@ -87,6 +104,8 @@ jobs:
           COMMITS_FILE: ${{ runner.temp }}/commits.txt
           FILES_FILE: ${{ runner.temp }}/files.txt
           PATHS_FILE: ${{ inputs.paths-file }}
+          SIZE_FILE: ${{ runner.temp }}/sizes.tsv
+          SIZE_IGNORE_FILE: ${{ inputs.size-ignore-file }}
         shell: bash
         run: |
           set -euo pipefail
@@ -124,6 +143,43 @@ jobs:
           fi
           if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
             echo "sensitive=$sensitive" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Size: report only, never sets fail. Bots get a size too.
+          counted=0 skipped=0
+          ignored=""
+          if [[ -f "$SIZE_IGNORE_FILE" ]]; then
+            sizes_scratch="$(mktemp -d)"
+            git init -q "$sizes_scratch"
+            ignored="$(cut -f3 "$SIZE_FILE" | git -C "$sizes_scratch" \
+              -c core.excludesFile="$(realpath "$SIZE_IGNORE_FILE")" \
+              check-ignore --no-index --stdin || true)"
+          fi
+          # || [[ -n "$path" ]] keeps a last line that has no newline.
+          while IFS=$'\t' read -r added deleted path || [[ -n "${path:-}" ]]; do
+            [[ -n "$path" ]] || continue
+            lines=$(( added + deleted ))
+            if [[ -n "$ignored" ]] && grep -qxF -- "$path" <<<"$ignored"; then
+              skipped=$(( skipped + lines ))
+            else
+              counted=$(( counted + lines ))
+            fi
+          done < "$SIZE_FILE"
+          if   (( counted <= 100 )); then size=size/S
+          elif (( counted <= 400 )); then size=size/M
+          elif (( counted <= 800 )); then size=size/L
+          else size=size/XL
+          fi
+          echo "Size: $counted changed lines counted, $skipped skipped. Label $size."
+          if [[ "$size" == size/L || "$size" == size/XL ]]; then
+            printf '::warning title=pr-check::%s\n' "This pull request is $size: $counted changed lines, over the 400-line budget. That is fine if the description says why. Otherwise consider splitting it."
+          fi
+          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+            echo "size=$size" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            printf '### Size: %s\n\n%s changed lines counted, %s skipped by %s.\n' \
+              "$size" "$counted" "$skipped" "$SIZE_IGNORE_FILE" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # The template's Checks section, for people and agents, not bots.
@@ -214,3 +270,32 @@ jobs:
             gh api -X DELETE "repos/$REPO/issues/$NUMBER/labels/security-sensitive" > /dev/null 2>&1 || true
             echo "Label absent."
           fi
+
+      - name: Set the size label
+        if: ${{ !cancelled() && steps.check.outputs.size != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SIZE: ${{ steps.check.outputs.size }}
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [[ "$FORK" == true ]]; then
+            echo "::warning title=pr-check::Pull request from a fork: the token is read-only, so the label is not set. $SIZE"
+            exit 0
+          fi
+          declare -A colour=([size/S]=0e8a16 [size/M]=fbca04 [size/L]=d93f0b [size/XL]=b60205)
+          for label in size/S size/M size/L size/XL; do
+            if [[ "$label" == "$SIZE" ]]; then
+              gh api "repos/$REPO/labels/${label/\//%2F}" > /dev/null 2>&1 \
+                || gh api "repos/$REPO/labels" -f name="$label" -f color="${colour[$label]}" \
+                     -f description="Changed lines, see docs/engineering.md section 7.1" > /dev/null
+              gh api "repos/$REPO/issues/$NUMBER/labels" -f "labels[]=$label" > /dev/null
+            else
+              # 404 when the label is not on the pull request, which is fine.
+              gh api -X DELETE "repos/$REPO/issues/$NUMBER/labels/${label/\//%2F}" > /dev/null 2>&1 || true
+            fi
+          done
+          echo "Label $SIZE set."
