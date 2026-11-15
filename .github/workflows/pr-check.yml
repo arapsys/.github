@@ -1,0 +1,194 @@
+# pr-check.yml: a reusable workflow that checks a pull request's title and
+# description, and labels changes to security-sensitive paths. A repository
+# adopts it with a caller workflow on pull_request_target; see README.md.
+#
+# It fails a pull request when:
+#   - the title is not a Conventional Commit, type(scope): description, or
+#     runs over 72 characters;
+#   - the description has no "## Checks" section, or a box in it is
+#     unticked with no reason on the line below it;
+#   - it shows generated content (a commit co-authored by
+#     noreply@anthropic.com, or a "Generated with" line in the description)
+#     and the "Generated content declared" box is unticked;
+#   - it touches a security-sensitive path and the "security-sensitive path"
+#     box is unticked.
+# A bot author (a login ending in [bot]) skips the Checks and provenance
+# rules, which ask about a template a bot does not fill in. Its title is
+# still checked.
+#
+# Security-sensitive paths are listed in gitignore syntax in the calling
+# repository's paths-file, read from the base branch, so a pull request
+# cannot unprotect itself. A pull request that touches one, by a file's new
+# or old name, gets the security-sensitive label, and loses it on a later
+# push that no longer does. With no paths-file there is no label.
+#
+# Nothing from the pull request's head is checked out or run: its title,
+# body, commit messages and file names are read as data. PR fields reach
+# scripts through env only, never through ${{ }} inside a script. The check
+# step is pure (files and env in, verdict out) so tests/pr-check.test.sh
+# can extract and run it. The steps before and after it make every API call.
+#
+# Written for arapsys. It deliberately leaves out the PAP rules in
+# blairforce1/.github's pr-checks (Change:, Record:, class:*, Approved-by:,
+# risk labels) and borrows only its pull_request_target pattern.
+
+name: pr-check
+
+on:
+  workflow_call:
+    inputs:
+      paths-file:
+        description: Security-sensitive path list, gitignore syntax, read from the base branch.
+        type: string
+        default: .github/security-sensitive-paths
+
+# pull-requests: write is for the security-sensitive label and nothing else.
+# On a pull request from a fork the token stays read-only and the label
+# step warns instead.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    name: pr-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the path list from the base branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.paths-file }}
+          sparse-checkout-cone-mode: false
+
+      - name: Read the pull request's commits and files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/commits" --jq '.[].commit.message' > "$RUNNER_TEMP/commits.txt"
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/files.txt"
+
+      - name: Check
+        id: check
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          COMMITS_FILE: ${{ runner.temp }}/commits.txt
+          FILES_FILE: ${{ runner.temp }}/files.txt
+          PATHS_FILE: ${{ inputs.paths-file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          err() { printf '::error title=pr-check::%s\n' "$1"; fail=1; }
+          ok() { printf 'ok    %s\n' "$1"; }
+
+          # Title.
+          types='feat|fix|docs|style|refactor|perf|test|build|ci|cli|chore|revert'
+          re="^($types)(\([a-z0-9._/,-]+\))?!?: [^[:space:]]"
+          if [[ "$TITLE" =~ $re ]]; then
+            ok "title is a Conventional Commit"
+          else
+            err "The title is not a Conventional Commit: type(scope): description, with a type from: ${types//|/, }."
+          fi
+          if (( ${#TITLE} > 72 )); then
+            err "The title is ${#TITLE} characters long. Keep it to 72."
+          fi
+
+          # Security-sensitive paths, matched with git's own gitignore rules.
+          sensitive=false
+          if [[ -f "$PATHS_FILE" ]]; then
+            scratch="$(mktemp -d)"
+            git init -q "$scratch"
+            matches="$(git -C "$scratch" -c core.excludesFile="$(realpath "$PATHS_FILE")" \
+              check-ignore --no-index --stdin < "$FILES_FILE" || true)"
+            if [[ -n "$matches" ]]; then
+              sensitive=true
+              printf 'Security-sensitive paths touched:\n%s\n' "$matches"
+            else
+              ok "no security-sensitive path touched"
+            fi
+          else
+            echo "No $PATHS_FILE on the base branch, so no path counts as security-sensitive."
+          fi
+          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+            echo "sensitive=$sensitive" >> "$GITHUB_OUTPUT"
+          fi
+
+          # The template's Checks section, for people and agents, not bots.
+          if [[ "$AUTHOR" == *"[bot]" ]]; then
+            echo "Bot author: Checks and provenance rules skipped."
+            exit "$fail"
+          fi
+          body="${BODY//$'\r'/}"
+          checks="$(printf '%s\n' "$body" | awk '/^## /{ on = ($0 ~ /^## Checks[[:space:]]*$/); next } on')"
+          if [[ -z "$checks" ]]; then
+            err "The description has no '## Checks' section. Use the pull request template."
+            exit "$fail"
+          fi
+
+          # An unticked box needs a reason: a non-blank line that is not itself a box.
+          unexplained="$(printf '%s\n' "$checks" | awk '
+            {
+              if (pending != "") {
+                if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*[-*] \[[ xX]\]/) print pending
+                pending = ""
+              }
+              if ($0 ~ /^[[:space:]]*[-*] \[ \]/) pending = $0
+            }
+            END { if (pending != "") print pending }')"
+          if [[ -n "$unexplained" ]]; then
+            while IFS= read -r box; do
+              err "Unticked with no reason on the next line: ${box#*] }"
+            done <<< "$unexplained"
+          else
+            ok "every unticked box has a reason"
+          fi
+
+          ticked() { printf '%s\n' "$checks" | grep -Eq "^[[:space:]]*[-*] \[[xX]\] .*$1"; }
+
+          generated=false
+          if grep -Eqi 'co-authored-by:.*noreply@anthropic\.com' "$COMMITS_FILE" \
+            || printf '%s\n' "$body" | grep -qi 'generated with'; then
+            generated=true
+          fi
+          if [[ "$generated" == true ]] && ! ticked 'Generated content declared'; then
+            err "This pull request shows generated content, but the 'Generated content declared' box is not ticked."
+          fi
+          if [[ "$sensitive" == true ]] && ! ticked 'security-sensitive path'; then
+            err "This pull request touches a security-sensitive path. Explain what could leak or fail open, and tick the box."
+          fi
+          exit "$fail"
+
+      - name: Set the security-sensitive label
+        if: ${{ !cancelled() && steps.check.outputs.sensitive != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SENSITIVE: ${{ steps.check.outputs.sensitive }}
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [[ "$FORK" == true ]]; then
+            echo "::warning title=pr-check::Pull request from a fork: the token is read-only, so the label is not set. security-sensitive=$SENSITIVE"
+            exit 0
+          fi
+          if [[ "$SENSITIVE" == true ]]; then
+            gh api "repos/$REPO/labels/security-sensitive" > /dev/null 2>&1 \
+              || gh api "repos/$REPO/labels" -f name=security-sensitive -f color=b60205 \
+                   -f description="Touches a path listed as security-sensitive" > /dev/null
+            gh api "repos/$REPO/issues/$NUMBER/labels" -f "labels[]=security-sensitive" > /dev/null
+            echo "Label added."
+          else
+            # 404 when the label is not on the pull request, which is fine.
+            gh api -X DELETE "repos/$REPO/issues/$NUMBER/labels/security-sensitive" > /dev/null 2>&1 || true
+            echo "Label absent."
+          fi

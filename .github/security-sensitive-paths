@@ -1,0 +1,6 @@
+# Security-sensitive paths for this repository, in gitignore syntax.
+# A pull request touching one gets the security-sensitive label from pr-check.
+.github/workflows/
+.github/security-sensitive-paths
+tests/
+SECURITY.md
