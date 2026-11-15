@@ -12,9 +12,14 @@
 #     and the "Generated content declared" box is unticked;
 #   - it touches a security-sensitive path and the "security-sensitive path"
 #     box is unticked.
-# A bot author (a login ending in [bot]) skips the Checks and provenance
-# rules, which ask about a template a bot does not fill in. Its title is
-# still checked.
+# It warns, without failing, when the description references no issue:
+# no closing keyword (close, fix or resolve with #N, owner/repo#N or an
+# issue URL), no "Part of #N" and no "No issue: <reason>" line. A closing
+# keyword is what lists the PR under the issue's Development section.
+#
+# A bot author (a login ending in [bot]) skips the Checks, provenance and
+# issue rules, which ask about a template a bot does not fill in. Its title
+# is still checked.
 #
 # Security-sensitive paths are listed in gitignore syntax in the calling
 # repository's paths-file, read from the base branch, so a pull request
@@ -127,6 +132,23 @@ jobs:
             exit "$fail"
           fi
           body="${BODY//$'\r'/}"
+
+          # An issue reference, so the PR shows under the issue's Development
+          # section. A warning, never a failure. HTML comments (the
+          # template's hints) are stripped first, so their examples never count.
+          visible="$(printf '%s\n' "$body" | perl -0pe 's/<!--.*?-->//gs')"
+          kw='(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+'
+          repo_ref='([[:alnum:]._-]+/[[:alnum:]._-]+)?#[0-9]+'
+          issue_url='https://github\.com/[^/[:space:]]+/[^/[:space:]]+/issues/[0-9]+'
+          if printf '%s\n' "$visible" | grep -Eiq \
+               -e "(^|[^[:alnum:]_])$kw($repo_ref|$issue_url)" \
+               -e "(^|[^[:alnum:]_])part of[[:space:]]+($repo_ref|$issue_url)" \
+               -e '^[[:space:]]*no issue:[[:space:]]*[^[:space:]]'; then
+            ok "an issue is referenced, or the PR says why there is none"
+          else
+            printf '::warning title=pr-check::%s\n' "No issue referenced. Start the description with 'Closes #N' (links the PR under the issue's Development section and closes it on merge), 'Part of #N', or 'No issue: <reason>'."
+          fi
+
           checks="$(printf '%s\n' "$body" | awk '/^## /{ on = ($0 ~ /^## Checks[[:space:]]*$/); next } on')"
           if [[ -z "$checks" ]]; then
             err "The description has no '## Checks' section. Use the pull request template."
