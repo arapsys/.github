@@ -1,3 +1,6 @@
+Closes #
+<!-- The issue this closes: shows the PR under the issue's Development section and closes the issue on merge. Use "Part of #<n>" for one step of several, or "No issue: <reason>". -->
+
 ## Summary
 <!-- One or two lines: what changed and why. -->
 

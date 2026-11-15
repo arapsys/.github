@@ -110,6 +110,32 @@ run "a sensitive change without the box fails" fail true "$good_title" "$unexpla
 run "an unlisted change without the sensitive box passes" pass false "$good_title" "$unexplained_sensitive" "docs/vault.md"
 run "no paths file means nothing is sensitive" pass false "$good_title" "$unexplained_sensitive" "src/Gate/Scanner.cs" "" someone missing-paths
 
+# Issue reference: a warning, never a failure.
+# issue <name> <want warning: yes|no> <first lines of the body>
+issue() {
+  run "$1" pass - "$good_title" "$3
+$all_ticked" "README.md"
+  local got=no
+  grep -q '^::warning title=pr-check::No issue referenced' "$work/log" && got=yes
+  if [ "$got" = "$2" ]; then
+    pass=$((pass + 1)); printf 'ok    %s\n' "$1 (warning: $2)"
+  else
+    failures=$((failures + 1)); printf 'FAIL  %s\nwarning got: %s want: %s\n' "$1" "$got" "$2"
+  fi
+}
+issue "Closes #12 needs no warning"                    no  "Closes #12"
+issue "fixes: #3 needs no warning"                     no  "This fixes: #3 for now."
+issue "Resolved owner/repo#7 needs no warning"         no  "Resolved arapsys/redd#7"
+issue "an issue URL needs no warning"                  no  "Closes https://github.com/arapsys/redd/issues/25"
+issue "Part of #9 needs no warning"                    no  "Part of #9"
+issue "No issue: with a reason needs no warning"       no  "No issue: memory consolidation"
+issue "no reference warns"                             yes "Some summary."
+issue "the empty template line warns"                  yes "Closes #"
+issue "No issue: with no reason warns"                 yes "No issue:"
+issue "an example inside a comment warns"              yes "<!-- e.g. Closes #12 -->"
+issue "a keyword inside a word warns"                  yes "Encloses #12"
+issue "a bare #12 warns"                               yes "See #12"
+
 # Bots.
 run "a bot with no Checks section passes" pass - "build(deps): bump a package" "" "Directory.Packages.props" "" "renovate[bot]"
 run "a bot with a bad title fails" fail - "Update dependency x" "" "Directory.Packages.props" "" "renovate[bot]"

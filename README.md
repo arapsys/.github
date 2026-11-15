@@ -73,7 +73,9 @@ It fails a pull request when:
 
 Security-sensitive paths are listed in `.github/security-sensitive-paths` in the calling repository, in gitignore syntax, and read from the base branch. A pull request that touches one gets the `security-sensitive` label, and loses it on a later push that no longer does. A repository with no list gets no label.
 
-A pull request opened by a bot account skips the Checks and provenance rules, since bots do not fill in the template. The title rule still applies.
+It warns, without failing, when the description names no issue. A closing keyword (`Closes #N`, `Fixes owner/repo#N`, `Resolves <issue URL>`) lists the PR under the issue's Development section and closes the issue on merge. `Part of #N` refers to an issue without closing it, and `No issue: <reason>` says why there is none. Examples inside HTML comments don't count. The PR template starts with a `Closes #` line to fill in.
+
+A pull request opened by a bot account skips the Checks, provenance and issue rules, since bots do not fill in the template. The title rule still applies.
 
 ### security
 
