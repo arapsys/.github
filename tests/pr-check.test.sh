@@ -256,6 +256,14 @@ fi
 # Bots.
 run "a bot with no Checks section passes" pass - "build(deps): bump a package" "" "Directory.Packages.props" "" "renovate[bot]"
 run "a bot with a bad title fails" fail - "Update dependency x" "" "Directory.Packages.props" "" "renovate[bot]"
+run "an agent app without a Checks section fails" fail - "$good_title" "" "README.md" "" "arapsys-redd-agent[bot]"
+run "an agent app with the template passes" pass - "$good_title" "Closes #1
+$all_ticked" "README.md" "" "arapsys-redd-agent[bot]"
+run "an agent app's generated commit needs the provenance box" fail - "$good_title" "Closes #1
+$no_provenance" "README.md" "docs: x
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" "arapsys-redd-agent[bot]"
+run "Dependabot is exempt by default" pass - "build(deps): bump a package" "" "Directory.Packages.props" "" "dependabot[bot]"
 run "a bot touching a sensitive path is still labelled" pass true "build(deps): bump a package" "" "tests/Directory.Packages.props" "" "renovate[bot]"
 
 printf '\n%s passed, %s failed\n' "$pass" "$failures"

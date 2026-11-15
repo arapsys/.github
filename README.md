@@ -87,7 +87,7 @@ The PR gets one `risk/*` label. To have hand-made label changes put back, add `l
 
 It warns, without failing, when the description names no issue. A closing keyword (`Closes #N`, `Fixes owner/repo#N`, `Resolves <issue URL>`) lists the PR under the issue's Development section and closes the issue on merge. `Part of #N` refers to an issue without closing it, and `No issue: <reason>` says why there is none. Examples inside HTML comments don't count. The PR template starts with a `Closes #` line to fill in.
 
-A pull request opened by a bot account skips the Checks, provenance and issue rules, since bots do not fill in the template. The title rule still applies.
+A pull request by a listed dependency bot (the `exempt-authors` input, by default `renovate[bot]` and `dependabot[bot]`) skips the Checks, provenance and issue rules, since it does not fill in the template. The title rule still applies. Every other author is checked in full, including any other bot, such as an agent's GitHub App. Never add an agent's app to `exempt-authors`.
 
 ### security
 
