@@ -34,9 +34,11 @@ run() {
   local name="$1" want="$2" want_sensitive="$3"
   printf '%s\n' "$6" > "$work/files"
   printf '%s\n' "${7:-}" > "$work/commits"
-  # SIZES and SIZE_IGNORE are locals of size_case when it is the caller,
+  # SIZES, SIZE_IGNORE and DEPS are locals of size_case or risk_case when one
+  # is the caller,
   # visible here through bash's dynamic scoping; unset otherwise.
   printf '%s' "${SIZES:-}" > "$work/sizes"
+  printf '%s' "${DEPS:-}" > "$work/deps"
   : > "$work/output"
   : > "$work/summary"
   (
@@ -45,7 +47,7 @@ run() {
     COMMITS_FILE="$work/commits" FILES_FILE="$work/files" \
     PATHS_FILE="${9:-paths}" GITHUB_OUTPUT="$work/output" \
     SIZE_FILE="$work/sizes" SIZE_IGNORE_FILE="${SIZE_IGNORE:-size-ignore}" \
-    GITHUB_STEP_SUMMARY="$work/summary" \
+    GITHUB_STEP_SUMMARY="$work/summary" DEPS_FILE="$work/deps" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -190,6 +192,65 @@ if [ -z "${SIZES+set}" ] && [ -z "${SIZE_IGNORE+set}" ]; then
   pass=$((pass + 1)); echo "ok    size_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  size_case leaked SIZES or SIZE_IGNORE into later tests"
+fi
+
+# Risk tier: reported, never a failure. The first rule that applies decides.
+# risk_case <name> <want tier> <want rule text> <rows> [author] [deps patch]
+# Rows are "additions deletions path", as for size_case; their paths are the
+# changed files. The deps patch stands in for the files API's patch of
+# Directory.Packages.props or global.json.
+risk_case() {
+  local SIZES DEPS="${6:-}" files
+  SIZES="$(printf '%s' "$4" | tr ' ' '\t')"
+  files="$(printf '%s\n' "$4" | awk 'NF { print $3 }')"
+  run "$1" pass - "$good_title" "Closes #1
+$all_ticked" "$files" "" "${5:-someone}"
+  local got
+  got="$(sed -n 's/^risk=//p' "$work/output")"
+  if [ "$got" = "risk/$2" ] && grep -qF "Risk: $2, because the pull request $3" "$work/log" \
+     && grep -qF "### Risk: $2" "$work/summary"; then
+    pass=$((pass + 1)); printf 'ok    %s (risk/%s)\n' "$1" "$2"
+  else
+    failures=$((failures + 1))
+    printf 'FAIL  %s\ngot:  %s\nwant: risk/%s, rule "%s"\n' "$1" "$got" "$2" "$3"
+    sed 's/^/      /' "$work/log"
+  fi
+}
+minor='@@ -1,3 +1,3 @@
+-    <PackageVersion Include="TUnit" Version="1.2.3" />
++    <PackageVersion Include="TUnit" Version="1.3.0" />'
+major='@@ -1,3 +1,3 @@
+-    <PackageVersion Include="TUnit" Version="1.2.3" />
++    <PackageVersion Include="TUnit" Version="2.0.0" />'
+sdk='@@ -1,4 +1,4 @@
+ {
+   "sdk": {
+-    "version": "10.0.100",
++    "version": "11.0.100",'
+risk_case "a security-sensitive path is high"   high   "touches a security-sensitive path" "10 0 src/Gate/Scanner.cs"
+risk_case "a sensitive doc is high, not low"    high   "touches a security-sensitive path" "5 0 docs/controls.md"
+risk_case "a migration is high"                 high   "touches a migration: src/Data/Migrations/0002_Add.cs" "10 0 src/Data/Migrations/0002_Add.cs"
+risk_case "a look-alike migration name is not"  medium "no high or low rule applies" "10 0 src/Data/MigrationsHelper.cs"
+risk_case "a package major bump is high"        high   "major version bump: TUnit 1 to 2" "1 1 Directory.Packages.props" "renovate[bot]" "$major"
+risk_case "an SDK major bump is high"           high   "major version bump: dotnet-sdk 10 to 11" "1 1 global.json" "renovate[bot]" "$sdk"
+risk_case "docs only, small, is low"            low    "documentation only, size/S" "20 0 docs/vault.md
+5 0 README.md"
+risk_case "docs only but size/L is medium"      medium "no high or low rule applies" "500 0 docs/vault.md"
+risk_case "docs plus code is medium"            medium "no high or low rule applies" "20 0 docs/vault.md
+5 0 src/Api/Upload.cs"
+risk_case "a docs look-alike folder is medium"  medium "no high or low rule applies" "5 0 docsite/index.html"
+risk_case "a Renovate minor bump is low"        low    "Renovate patch or minor update of dependency files, size/S" "1 1 Directory.Packages.props
+40 40 src/App/packages.lock.json" "renovate[bot]" "$minor"
+risk_case "Renovate with no readable patch is medium" medium "no high or low rule applies" "1 1 Directory.Packages.props" "renovate[bot]" ""
+risk_case "Renovate touching code is medium"    medium "no high or low rule applies" "1 1 Directory.Packages.props
+3 0 src/A.cs" "renovate[bot]" "$minor"
+risk_case "a person's minor bump is medium"     medium "no high or low rule applies" "1 1 Directory.Packages.props" "someone" "$minor"
+risk_case "another bot's minor bump is medium"  medium "no high or low rule applies" "1 1 Directory.Packages.props" "dependabot[bot]" "$minor"
+risk_case "a code change is medium"             medium "no high or low rule applies" "10 0 src/Api/Upload.cs"
+if [ -z "${DEPS+set}" ]; then
+  pass=$((pass + 1)); echo "ok    risk_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  risk_case leaked DEPS into later tests"
 fi
 
 # Bots.
