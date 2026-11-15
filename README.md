@@ -10,7 +10,7 @@ Shared GitHub workflows and default community health files for repositories in t
 | `.github/workflows/pr-check.yml` | Reusable workflow. Checks a pull request's title, Checks list and provenance, and labels changes to security-sensitive paths. |
 | `.github/workflows/ci.yml` | This repository's own checks. Runs the test scripts, then runs both reusable workflows from the branch under change. |
 | `PULL_REQUEST_TEMPLATE.md` | Default pull request template. |
-| `.github/ISSUE_TEMPLATE/` | Default issue forms: a task form and a defect form. |
+| `.github/ISSUE_TEMPLATE/` | Default issue forms: a task form (issue type Task) and a defect form (issue type Bug). |
 | `SECURITY.md` | Default security policy: how to report a vulnerability or exposed data. |
 
 `security.yml` and its test were copied from [blairforce1/.github](https://github.com/blairforce1/.github) at commit `254bdce`. `pr-check.yml` is written for arapsys, and it deliberately leaves out the PAP process rules in `blairforce1/.github`'s `pr-checks` (`Change:`, `Record:`, `class:*`, `Approved-by:` and risk labels). Repositories that adopt PAP keep calling `blairforce1/.github` for those.
