@@ -20,6 +20,20 @@
 # caller's own scripts/pr-size.sh where it has one: the files API diffs
 # against the merge base, follows renames and gives binary files 0 lines.
 #
+# It computes a risk tier, never failing because of it, for the trial in
+# arapsys/redd docs/engineering.md section 7.3. The first rule that applies
+# decides, and the job summary names it:
+#   high    touches a security-sensitive path; touches a Migrations/ folder;
+#           or bumps a major version in Directory.Packages.props or the SDK
+#           in global.json (read from the files API's patch, as data);
+#   low     documentation only (*.md or docs/), size S or M; or a
+#           renovate[bot] update of dependency files only, with no major
+#           bump in a readable patch, size S or M;
+#   medium  everything else.
+# It sets one label, risk/high, risk/medium or risk/low. Callers that also
+# trigger on labeled and unlabeled get any hand-made change put back: label
+# changes by this workflow's token don't start new runs.
+#
 # It warns, without failing, when the description references no issue:
 # no closing keyword (close, fix or resolve with #N, owner/repo#N or an
 # issue URL), no "Part of #N" and no "No issue: <reason>" line. A closing
@@ -59,8 +73,8 @@ on:
         type: string
         default: .github/pr-size-ignore
 
-# pull-requests: write is for the security-sensitive and size labels and
-# nothing else.
+# pull-requests: write is for the security-sensitive, size and risk labels
+# and nothing else.
 # On a pull request from a fork the token stays read-only and the label
 # step warns instead.
 permissions:
@@ -94,6 +108,11 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/files.txt"
           # One line per file, under its new name: additions, deletions, path.
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | "\(.additions)\t\(.deletions)\t\(.filename)"' > "$RUNNER_TEMP/sizes.tsv"
+          # The patches of the files that hold dependency versions, for the
+          # major-bump rule. A file whose patch GitHub omits adds nothing.
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" \
+            --jq '.[] | select(.filename | test("(^|/)(Directory\\.Packages\\.props|global\\.json)$")) | .patch // empty' \
+            > "$RUNNER_TEMP/deps.patch"
 
       - name: Check
         id: check
@@ -106,6 +125,7 @@ jobs:
           PATHS_FILE: ${{ inputs.paths-file }}
           SIZE_FILE: ${{ runner.temp }}/sizes.tsv
           SIZE_IGNORE_FILE: ${{ inputs.size-ignore-file }}
+          DEPS_FILE: ${{ runner.temp }}/deps.patch
         shell: bash
         run: |
           set -euo pipefail
@@ -180,6 +200,66 @@ jobs:
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             printf '### Size: %s\n\n%s changed lines counted, %s skipped by %s.\n' \
               "$size" "$counted" "$skipped" "$SIZE_IGNORE_FILE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Risk tier: report only, never sets fail. The first rule that
+          # applies decides.
+          changed="$(grep -v '^$' "$FILES_FILE" || true)"
+          risk_scratch="$(mktemp -d)"
+          git init -q "$risk_scratch"
+          printf '%s\n' 'Migrations/' > "$risk_scratch/migrations"
+          migrations="$(printf '%s\n' "$changed" | git -C "$risk_scratch" \
+            -c core.excludesFile="$risk_scratch/migrations" check-ignore --no-index --stdin || true)"
+          # Major bumps: compare the major version of each package (and the
+          # SDK) between the patch's removed and added lines.
+          majors=""
+          deps_known=false
+          if [[ -s "${DEPS_FILE:-}" ]]; then
+            deps_known=true
+            majors="$(awk '
+              /^(\+\+\+|---)/ { next }
+              /^[-+]/ {
+                sign = substr($0, 1, 1); name = ""; ver = ""
+                if (match($0, /Include="[^"]+"/)) name = substr($0, RSTART + 9, RLENGTH - 10)
+                if (match($0, /Version="[^"]+"/)) ver = substr($0, RSTART + 9, RLENGTH - 10)
+                if (name == "" && match($0, /"version"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+                  v = substr($0, RSTART, RLENGTH); sub(/.*:[[:space:]]*"/, "", v); sub(/"$/, "", v)
+                  name = "dotnet-sdk"; ver = v
+                }
+                if (name != "" && ver != "") {
+                  split(ver, part, "."); major = part[1] + 0
+                  if (sign == "-") old[name] = major; else new[name] = major
+                }
+              }
+              END { for (n in new) if ((n in old) && new[n] > old[n]) printf "%s %d to %d\n", n, old[n], new[n] }
+            ' "$DEPS_FILE")"
+          fi
+          only() { # only <extended regex>: every changed path matches it
+            [[ -n "$changed" ]] && ! printf '%s\n' "$changed" | grep -Evq "$1"
+          }
+          small=false
+          [[ "$size" == size/S || "$size" == size/M ]] && small=true
+          if [[ "$sensitive" == true ]]; then
+            risk=high; rule="touches a security-sensitive path"
+          elif [[ -n "$migrations" ]]; then
+            risk=high; rule="touches a migration: $(head -1 <<<"$migrations")"
+          elif [[ -n "$majors" ]]; then
+            risk=high; rule="major version bump: $(head -1 <<<"$majors")"
+          elif $small && only '(\.md$|^docs/)'; then
+            risk=low; rule="documentation only, $size"
+          elif $small && [[ "$AUTHOR" == "renovate[bot]" ]] && $deps_known \
+               && only '(^|/)(Directory\.Packages\.props|packages\.lock\.json|global\.json|dotnet-tools\.json)$'; then
+            risk=low; rule="Renovate patch or minor update of dependency files, $size"
+          else
+            risk=medium; rule="no high or low rule applies"
+          fi
+          echo "Risk: $risk, because the pull request $rule."
+          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+            echo "risk=risk/$risk" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            printf '\n### Risk: %s\n\nDecided by: %s. Report only (docs/engineering.md section 7.3).\n' \
+              "$risk" "$rule" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # The template's Checks section, for people and agents, not bots.
@@ -299,3 +379,32 @@ jobs:
             fi
           done
           echo "Label $SIZE set."
+
+      - name: Set the risk label
+        if: ${{ !cancelled() && steps.check.outputs.risk != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          RISK: ${{ steps.check.outputs.risk }}
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [[ "$FORK" == true ]]; then
+            echo "::warning title=pr-check::Pull request from a fork: the token is read-only, so the label is not set. $RISK"
+            exit 0
+          fi
+          declare -A colour=([risk/high]=b60205 [risk/medium]=fbca04 [risk/low]=0e8a16)
+          for label in risk/high risk/medium risk/low; do
+            if [[ "$label" == "$RISK" ]]; then
+              gh api "repos/$REPO/labels/${label/\//%2F}" > /dev/null 2>&1 \
+                || gh api "repos/$REPO/labels" -f name="$label" -f color="${colour[$label]}" \
+                     -f description="Computed by pr-check, never set by hand (docs/engineering.md section 7.3)" > /dev/null
+              gh api "repos/$REPO/issues/$NUMBER/labels" -f "labels[]=$label" > /dev/null
+            else
+              # 404 when the label is not on the pull request, which is fine.
+              gh api -X DELETE "repos/$REPO/issues/$NUMBER/labels/${label/\//%2F}" > /dev/null 2>&1 || true
+            fi
+          done
+          echo "Label $RISK set."
