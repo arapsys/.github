@@ -1,0 +1,42 @@
+name: Task
+description: A piece of work for a person or a cloud session
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the work with synthetic or redacted examples only. Never paste real customer, contract or personal data into an issue: issues are emailed in notifications. If real data is exposed, email privacy@arapsys.com instead (see SECURITY.md).
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should exist or be true when this is done?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Design docs, memory entries, build steps and anything the work depends on.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Checks a reviewer can tick off. Include the tests that should pass.
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Decisions this may force
+      description: Open questions or proposed decisions this work could settle. Leave blank if none.
+  - type: checkboxes
+    id: no-customer-data
+    attributes:
+      label: Confidentiality
+      options:
+        - label: This issue contains no real customer, contract or personal data.
+          required: true
