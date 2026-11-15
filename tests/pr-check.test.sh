@@ -19,10 +19,6 @@ yq -r '.jobs.check.steps[] | select(.id == "check") | .run' \
 printf '%s\n' '# test list' 'src/Gate/' 'tests/' 'docs/controls.md' > "$work/paths"
 printf '%s\n' '# size ignore' 'packages.lock.json' '*.g.cs' 'tests/synthetic/' '**/Migrations/' > "$work/size-ignore"
 
-# Per-file sizes for the next run: lines of "additions<TAB>deletions<TAB>path".
-# Empty means no files changed.
-SIZES=""
-
 good_title='docs(engineering): add practices review'
 all_ticked='## Summary
 Something.
@@ -38,7 +34,9 @@ run() {
   local name="$1" want="$2" want_sensitive="$3"
   printf '%s\n' "$6" > "$work/files"
   printf '%s\n' "${7:-}" > "$work/commits"
-  printf '%s' "$SIZES" > "$work/sizes"
+  # SIZES and SIZE_IGNORE are locals of size_case when it is the caller,
+  # visible here through bash's dynamic scoping; unset otherwise.
+  printf '%s' "${SIZES:-}" > "$work/sizes"
   : > "$work/output"
   : > "$work/summary"
   (
@@ -146,12 +144,18 @@ issue "a keyword inside a word warns"                  yes "Encloses #12"
 issue "a bare #12 warns"                               yes "See #12"
 
 # Size: reported, never a failure.
-# size_case <name> <want label> <want warning: yes|no> <sizes> [author]
+# size_case <name> <want label> <want warning: yes|no> <rows> [ignore file] [author]
+# Rows are "additions deletions path", one per line, space-separated (no test
+# path has a space); they become the API's tab-separated lines. Every case
+# also checks the PR still passes, so size never fails the check.
+# These cases test the arithmetic and the ignore list on rows as the API
+# reports them. Whether GitHub reports a rename or a binary file the way
+# scripts/pr-size.sh counts it is checked live on a real PR, not here.
 size_case() {
-  SIZES="$4"
+  local SIZES SIZE_IGNORE="${5:-size-ignore}"
+  SIZES="$(printf '%s' "$4" | tr ' ' '\t')"
   run "$1" pass - "$good_title" "Closes #1
-$all_ticked" "README.md" "" "${5:-someone}"
-  SIZES=""
+$all_ticked" "README.md" "" "${6:-someone}"
   local got got_warn=no
   got="$(sed -n 's/^size=//p' "$work/output")"
   grep -q '^::warning title=pr-check::This pull request is size/' "$work/log" && got_warn=yes
@@ -163,32 +167,30 @@ $all_ticked" "README.md" "" "${5:-someone}"
     sed 's/^/      /' "$work/log"
   fi
 }
-T=$'\t'
-size_case "no files is size/S"                 size/S  no  ""
-size_case "100 lines is still size/S"          size/S  no  "60${T}40${T}src/A.cs"
-size_case "101 lines is size/M"                size/M  no  "60${T}41${T}src/A.cs"
-size_case "400 lines is still size/M"          size/M  no  "300${T}100${T}src/A.cs"
-size_case "401 lines is size/L and warns"      size/L  yes "300${T}101${T}src/A.cs"
-size_case "800 lines is still size/L"          size/L  yes "800${T}0${T}src/A.cs"
-size_case "801 lines is size/XL and warns"     size/XL yes "801${T}0${T}src/A.cs"
-size_case "lines add up across files"          size/M  no  "60${T}0${T}src/A.cs
-50${T}0${T}src/B.cs"
-size_case "a lock file is skipped"             size/S  no  "900${T}0${T}src/App/packages.lock.json
-10${T}0${T}src/A.cs"
-size_case "generated code is skipped"          size/S  no  "500${T}0${T}obj/Api.g.cs"
-size_case "synthetic fixtures are skipped"     size/S  no  "500${T}0${T}tests/synthetic/base.xml"
-size_case "a nested Migrations folder is skipped" size/S no "500${T}0${T}src/Data/Migrations/0001_Init.cs"
-size_case "a look-alike name is counted"       size/L  yes "500${T}0${T}tests/synthetic-old/base.xml"
-size_case "a binary file counts 0"             size/S  no  "0${T}0${T}docs/diagram.png"
-size_case "a renamed file counts its edits"    size/S  no  "3${T}2${T}src/New.cs"
-size_case "a bot still gets a size"            size/M  no  "200${T}0${T}src/A.cs" "renovate[bot]"
-SIZE_IGNORE=missing-ignore
-size_case "no ignore file counts everything"   size/XL yes "900${T}0${T}src/App/packages.lock.json"
-SIZE_IGNORE=""
-SIZES="5000${T}0${T}src/A.cs"
-run "an XL pull request still passes" pass - "$good_title" "Closes #1
-$all_ticked" "README.md"
-SIZES=""
+size_case "no files is size/S"                     size/S  no  ""
+size_case "100 lines is still size/S"              size/S  no  "60 40 src/A.cs"
+size_case "101 lines is size/M"                    size/M  no  "60 41 src/A.cs"
+size_case "400 lines is still size/M"              size/M  no  "300 100 src/A.cs"
+size_case "401 lines is size/L and warns"          size/L  yes "300 101 src/A.cs"
+size_case "800 lines is still size/L"              size/L  yes "800 0 src/A.cs"
+size_case "801 lines is size/XL, warns, passes"    size/XL yes "801 0 src/A.cs"
+size_case "lines add up across files"              size/M  no  "60 0 src/A.cs
+50 0 src/B.cs"
+size_case "a 0/0 row adds nothing"                 size/S  no  "0 0 docs/diagram.png
+100 0 src/A.cs"
+size_case "a lock file is skipped"                 size/S  no  "900 0 src/App/packages.lock.json
+10 0 src/A.cs"
+size_case "generated code is skipped"              size/S  no  "500 0 obj/Api.g.cs"
+size_case "synthetic fixtures are skipped"         size/S  no  "500 0 tests/synthetic/base.xml"
+size_case "a nested Migrations folder is skipped"  size/S  no  "500 0 src/Data/Migrations/0001_Init.cs"
+size_case "a look-alike name is counted"           size/L  yes "500 0 tests/synthetic-old/base.xml"
+size_case "a bot still gets a size"                size/M  no  "200 0 src/A.cs" "" "renovate[bot]"
+size_case "no ignore file counts everything"       size/XL yes "900 0 src/App/packages.lock.json" missing-ignore
+if [ -z "${SIZES+set}" ] && [ -z "${SIZE_IGNORE+set}" ]; then
+  pass=$((pass + 1)); echo "ok    size_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  size_case leaked SIZES or SIZE_IGNORE into later tests"
+fi
 
 # Bots.
 run "a bot with no Checks section passes" pass - "build(deps): bump a package" "" "Directory.Packages.props" "" "renovate[bot]"
