@@ -1,5 +1,6 @@
 name: Defect
 description: Something produced a wrong result. Record where it should have been caught, and what now covers it.
+type: Bug
 title: "defect: "
 labels: ["defect"]
 body:

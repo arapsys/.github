@@ -1,5 +1,6 @@
 name: Task
 description: A piece of work for a person or a cloud session
+type: Task
 body:
   - type: markdown
     attributes:
