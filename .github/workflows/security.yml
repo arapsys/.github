@@ -17,6 +17,13 @@
 #   trivy     `trivy fs`: vulnerable dependencies, misconfiguration and
 #             secrets in the working tree.
 #
+# Switches: semgrep and trivy each have an input, on by default, so a caller
+# can skip a scanner on a pull request with nothing for it to scan. A skipped
+# job still reports its check, as skipped, which satisfies a required check;
+# a caller must never skip the whole workflow call, which would leave the
+# required checks missing. gitleaks has no switch: secrets can arrive in any
+# file, docs included.
+#
 # Gate: a finding at high or critical fails its job; a lower one is a
 # warning. Trivy and Semgrep report the level in SARIF (error is high or
 # critical for Trivy, ERROR for Semgrep); gitleaks has no levels, and every
@@ -56,6 +63,14 @@ on:
     inputs:
       mise-check:
         description: Run `mise run check`. Turn off only in a repository that defines no check task.
+        type: boolean
+        default: true
+      semgrep:
+        description: Run Semgrep. A caller turns it off only for a pull request with nothing Semgrep scans (no code, workflows, YAML or Dockerfiles). The check still reports, as skipped.
+        type: boolean
+        default: true
+      trivy:
+        description: Run Trivy. A caller turns it off only for a pull request with no code, dependencies or configuration. The check still reports, as skipped.
         type: boolean
         default: true
 
@@ -202,6 +217,7 @@ jobs:
 
   semgrep:
     name: semgrep
+    if: inputs.semgrep
     runs-on: ubuntu-latest
     env:
       TOOL: semgrep
@@ -248,6 +264,7 @@ jobs:
 
   trivy:
     name: trivy
+    if: inputs.trivy
     runs-on: ubuntu-latest
     env:
       TOOL: trivy
