@@ -230,23 +230,23 @@ sdk='@@ -1,4 +1,4 @@
 risk_case "a security-sensitive path is high"   high   "touches a security-sensitive path" "10 0 src/Gate/Scanner.cs"
 risk_case "a sensitive doc is high, not low"    high   "touches a security-sensitive path" "5 0 docs/controls.md"
 risk_case "a migration is high"                 high   "touches a migration: src/Data/Migrations/0002_Add.cs" "10 0 src/Data/Migrations/0002_Add.cs"
-risk_case "a look-alike migration name is not"  medium "no high or low rule applies" "10 0 src/Data/MigrationsHelper.cs"
+risk_case "a look-alike migration name is not"  medium "matches no high or low rule" "10 0 src/Data/MigrationsHelper.cs"
 risk_case "a package major bump is high"        high   "major version bump: TUnit 1 to 2" "1 1 Directory.Packages.props" "renovate[bot]" "$major"
 risk_case "an SDK major bump is high"           high   "major version bump: dotnet-sdk 10 to 11" "1 1 global.json" "renovate[bot]" "$sdk"
-risk_case "docs only, small, is low"            low    "documentation only, size/S" "20 0 docs/vault.md
+risk_case "docs only, small, is low"            low    "is documentation only, size/S" "20 0 docs/vault.md
 5 0 README.md"
-risk_case "docs only but size/L is medium"      medium "no high or low rule applies" "500 0 docs/vault.md"
-risk_case "docs plus code is medium"            medium "no high or low rule applies" "20 0 docs/vault.md
+risk_case "docs only but size/L is medium"      medium "matches no high or low rule" "500 0 docs/vault.md"
+risk_case "docs plus code is medium"            medium "matches no high or low rule" "20 0 docs/vault.md
 5 0 src/Api/Upload.cs"
-risk_case "a docs look-alike folder is medium"  medium "no high or low rule applies" "5 0 docsite/index.html"
-risk_case "a Renovate minor bump is low"        low    "Renovate patch or minor update of dependency files, size/S" "1 1 Directory.Packages.props
+risk_case "a docs look-alike folder is medium"  medium "matches no high or low rule" "5 0 docsite/index.html"
+risk_case "a Renovate minor bump is low"        low    "is a Renovate patch or minor update of dependency files, size/S" "1 1 Directory.Packages.props
 40 40 src/App/packages.lock.json" "renovate[bot]" "$minor"
-risk_case "Renovate with no readable patch is medium" medium "no high or low rule applies" "1 1 Directory.Packages.props" "renovate[bot]" ""
-risk_case "Renovate touching code is medium"    medium "no high or low rule applies" "1 1 Directory.Packages.props
+risk_case "Renovate with no readable patch is medium" medium "matches no high or low rule" "1 1 Directory.Packages.props" "renovate[bot]" ""
+risk_case "Renovate touching code is medium"    medium "matches no high or low rule" "1 1 Directory.Packages.props
 3 0 src/A.cs" "renovate[bot]" "$minor"
-risk_case "a person's minor bump is medium"     medium "no high or low rule applies" "1 1 Directory.Packages.props" "someone" "$minor"
-risk_case "another bot's minor bump is medium"  medium "no high or low rule applies" "1 1 Directory.Packages.props" "dependabot[bot]" "$minor"
-risk_case "a code change is medium"             medium "no high or low rule applies" "10 0 src/Api/Upload.cs"
+risk_case "a person's minor bump is medium"     medium "matches no high or low rule" "1 1 Directory.Packages.props" "someone" "$minor"
+risk_case "another bot's minor bump is medium"  medium "matches no high or low rule" "1 1 Directory.Packages.props" "dependabot[bot]" "$minor"
+risk_case "a code change is medium"             medium "matches no high or low rule" "10 0 src/Api/Upload.cs"
 if [ -z "${DEPS+set}" ]; then
   pass=$((pass + 1)); echo "ok    risk_case leaves no state behind"
 else
