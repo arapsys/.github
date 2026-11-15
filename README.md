@@ -21,7 +21,7 @@ GitHub applies the default community health files in this repository (pull reque
 
 ## Using the reusable workflows
 
-Call them from a thin workflow in the repository, pinned to a full commit SHA, never to a branch:
+Call them from two thin workflows in the repository, each pinned to a full commit SHA, never to a branch. They need different triggers.
 
 ```yaml
 # .github/workflows/pr.yml
@@ -34,19 +34,33 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  security-events: write
 
 jobs:
   pr-check:
     uses: arapsys/.github/.github/workflows/pr-check.yml@<full sha> # main as of <date>
+```
+
+```yaml
+# .github/workflows/security.yml
+name: security
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
   security:
-    if: contains(fromJSON('["opened", "reopened", "synchronize"]'), github.event.action)
     uses: arapsys/.github/.github/workflows/security.yml@<full sha> # main as of <date>
     with:
       mise-check: false
 ```
 
-Both workflows run on `pull_request_target`, so a pull request cannot change the checks it is judged by. Neither one checks out or runs the pull request's own code. `pr-check` reads the pull request's title, body, commits and file names through the API as data, and reads its path list from the base branch.
+`pr-check` runs on `pull_request_target`, so a pull request cannot change the check it is judged by. It never checks out or runs the pull request's own code: it reads the title, body, commits and file names through the API as data, and reads its path list from the base branch.
+
+`security` runs on `pull_request`, because it must scan the pull request's code. That event gives it a read-only token and no secrets, so checking that code out is safe. Don't put it on `pull_request_target`. Its checkouts set no `ref`, so there it would scan the base branch, and adding the head's `ref` would run untrusted code with a write token. `arapsys/redd` calls them this way.
 
 ### pr-check
 
