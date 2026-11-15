@@ -7,7 +7,7 @@ Shared GitHub workflows and default community health files for repositories in t
 | File | What it is |
 |---|---|
 | `.github/workflows/security.yml` | Reusable workflow. Runs gitleaks, Semgrep and Trivy on a pull request. High and critical findings fail. |
-| `.github/workflows/pr-check.yml` | Reusable workflow. Checks a pull request's title, Checks list and provenance, and labels changes to security-sensitive paths. |
+| `.github/workflows/pr-check.yml` | Reusable workflow. Checks a pull request's title, Checks list and provenance, labels changes to security-sensitive paths, and reports size. |
 | `.github/workflows/ci.yml` | This repository's own checks. Runs the test scripts, then runs both reusable workflows from the branch under change. |
 | `PULL_REQUEST_TEMPLATE.md` | Default pull request template. |
 | `.github/ISSUE_TEMPLATE/` | Default issue forms: a task form (issue type Task) and a defect form (issue type Bug). |
@@ -72,6 +72,8 @@ It fails a pull request when:
 - it touches a security-sensitive path and the security-sensitive box is unticked.
 
 Security-sensitive paths are listed in `.github/security-sensitive-paths` in the calling repository, in gitignore syntax, and read from the base branch. A pull request that touches one gets the `security-sensitive` label, and loses it on a later push that no longer does. A repository with no list gets no label.
+
+It reports each pull request's size, and never fails because of it. It counts added plus deleted lines from the PR files API, which diffs against the merge base, follows renames and counts binary files as 0. Paths listed in `.github/pr-size-ignore` in the calling repository are skipped. That file uses gitignore syntax and is read from the base branch. The PR gets one label: `size/S` (up to 100 lines), `size/M` (up to 400), `size/L` (up to 800) or `size/XL`. The count goes in the job summary, and `size/L` and `size/XL` add a warning annotation. Bot PRs get a size too. A caller with a local counter, such as arapsys/redd's `scripts/pr-size.sh`, should count the same way. Override the file with the `size-ignore-file` input.
 
 It warns, without failing, when the description names no issue. A closing keyword (`Closes #N`, `Fixes owner/repo#N`, `Resolves <issue URL>`) lists the PR under the issue's Development section and closes the issue on merge. `Part of #N` refers to an issue without closing it, and `No issue: <reason>` says why there is none. Examples inside HTML comments don't count. The PR template starts with a `Closes #` line to fill in.
 
