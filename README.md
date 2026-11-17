@@ -69,7 +69,8 @@ It fails a pull request when:
 - the title is not a Conventional Commit (`type(scope): description`), or runs over 72 characters;
 - a box under `## Checks` is unticked with no reason on the next line;
 - the pull request shows generated content (a commit co-authored by `noreply@anthropic.com`, or a "Generated with" line in the body) but the provenance box is unticked;
-- it touches a security-sensitive path and the security-sensitive box is unticked.
+- it touches a security-sensitive path and the security-sensitive box is unticked;
+- its title type is `fix` and, under a `tests-paths` prefix (`tests/` by default), it removes more assertion or test-attribute lines than it adds (`Assert.`, `[Test]`, `[Fact]`, `[Theory]`, `[TestMethod]`), or adds more `[Skip(` or `[Ignore(` lines than it removes. A comment line counts on neither side, so commenting out an assertion removes it. A fix never weakens the tests that check it. Lines are counted from the files API's patches, as data. A test file GitHub gives no patch for, such as a binary fixture, gets a warning, not a failure.
 
 Security-sensitive paths are listed in `.github/security-sensitive-paths` in the calling repository, in gitignore syntax, and read from the base branch. A pull request that touches one gets the `security-sensitive` label, and loses it on a later push that no longer does. A repository with no list gets no label.
 

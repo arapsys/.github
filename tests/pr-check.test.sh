@@ -39,6 +39,7 @@ run() {
   # visible here through bash's dynamic scoping; unset otherwise.
   printf '%s' "${SIZES:-}" > "$work/sizes"
   printf '%s' "${DEPS:-}" > "$work/deps"
+  printf '%s' "${TESTS_PATCH:-}" > "$work/tests.patch"
   : > "$work/output"
   : > "$work/summary"
   (
@@ -48,6 +49,7 @@ run() {
     PATHS_FILE="${9:-paths}" GITHUB_OUTPUT="$work/output" \
     SIZE_FILE="$work/sizes" SIZE_IGNORE_FILE="${SIZE_IGNORE:-size-ignore}" \
     GITHUB_STEP_SUMMARY="$work/summary" DEPS_FILE="$work/deps" \
+    TESTS_PATCH_FILE="$work/tests.patch" TESTS_PATHS="tests/" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -251,6 +253,76 @@ if [ -z "${DEPS+set}" ]; then
   pass=$((pass + 1)); echo "ok    risk_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  risk_case leaked DEPS into later tests"
+fi
+
+# A fix keeps its tests.
+# fix_case <name> <want: pass|fail> <want log text, or -> <title> <tests patch>
+fix_case() {
+  local TESTS_PATCH="$5"
+  run "$1" "$2" - "$4" "Closes #1
+$all_ticked" "tests/A/ATests.cs"
+  if [ "$3" != - ]; then
+    if grep -qF -- "$3" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$1" "$3"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$1" "$3"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+removes='=== tests/A/ATests.cs
+@@ -10,4 +10,3 @@
+     [Test]
+     public async Task works()
+-        await Assert.That(result).IsEqualTo(3);
++        await Task.CompletedTask;'
+fix_case "a fix that removes an assertion fails" fail "This fix removes 1 assertion or test lines under tests/ and adds 0" "fix(gate): stop the crash" "$removes"
+fix_case "a fix! title is still a fix" fail "removes 1" "fix!: stop the crash" "$removes"
+fix_case "a refactor may remove an assertion" pass - "refactor(gate): tidy" "$removes"
+fix_case "a fix that changes an assertion passes" pass "1 assertion or test lines removed, 1 added" "fix(gate): stop the crash" '=== tests/A/ATests.cs
+@@ -12 +12 @@
+-        await Assert.That(result).IsEqualTo(3);
++        await Assert.That(result).IsEqualTo(4);'
+fix_case "commenting out an assertion fails" fail "removes 1" "fix: x" '=== tests/A/ATests.cs
+@@ -12 +12 @@
+-        await Assert.That(result).IsEqualTo(3);
++        // await Assert.That(result).IsEqualTo(3);'
+fix_case "deleting a commented-out assertion passes" pass "0 assertion or test lines removed" "fix: x" '=== tests/A/ATests.cs
+@@ -12 +11,0 @@
+-        // await Assert.That(result).IsEqualTo(3);'
+fix_case "removing a [Test] attribute fails" fail "removes 1" "fix: x" '=== tests/A/ATests.cs
+@@ -9,2 +9,1 @@
+-    [Test]
+     public async Task works()'
+fix_case "removing an [Arguments] line is not a test" pass - "fix: x" '=== tests/A/ATests.cs
+@@ -9,2 +9,1 @@
+-    [Arguments(1)]
+     [Test]'
+fix_case "a fix that adds a test passes" pass "0 assertion or test lines removed, 2 added" "fix: x" '=== tests/A/ATests.cs
+@@ -20,0 +21,4 @@
++    [Test]
++    public async Task new_case()
++        => await Assert.That(1).IsEqualTo(1);'
+fix_case "a fix that adds a skip fails" fail "skips 1 more test(s)" "fix: x" '=== tests/A/ATests.cs
+@@ -9 +9,2 @@
++    [Skip("flaky")]
+     [Test]'
+fix_case "a fix that removes a skip passes" pass - "fix: x" '=== tests/A/ATests.cs
+@@ -9,2 +9 @@
+-    [Skip("flaky")]
+     [Test]'
+fix_case "lines move between files and still balance" pass "1 assertion or test lines removed, 1 added" "fix: x" '=== tests/A/ATests.cs
+@@ -12 +11,0 @@
+-        await Assert.That(a).IsTrue();
+=== tests/B/BTests.cs
+@@ -1,0 +2 @@
++        await Assert.That(a).IsTrue();'
+fix_case "a test file with no patch warns" pass "GitHub gave no diff for tests/synthetic/big.docx" "fix: x" '=== no-patch tests/synthetic/big.docx'
+fix_case "a fix with no test changes passes" pass - "fix: x" ""
+if [ -z "${TESTS_PATCH+set}" ]; then
+  pass=$((pass + 1)); echo "ok    fix_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  fix_case leaked TESTS_PATCH into later tests"
 fi
 
 # Bots.
