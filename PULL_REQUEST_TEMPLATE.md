@@ -8,7 +8,7 @@ Closes #
 <!-- What you ran and what it showed, or a link to the run. -->
 
 ## Follow-ups and open questions
-<!-- "None", or one bullet per follow-up or open question, each ending in a link: #<issue> for an existing issue, memory: <entry id> for an open question or context entry this PR adds, or raise: <one line of intent> for work the coordinator should turn into an issue. Nothing here as prose elsewhere in the description. -->
+<!-- "None", or one bullet per follow-up or open question, each ending in a link: #<issue> for an existing issue, memory: <entry id> for any memory entry this PR adds (a decision, pitfall, context entry or open question, all of which JB settles at /consolidate), or raise: <one line of intent> for work the coordinator should turn into an issue. Nothing here as prose elsewhere in the description. -->
 None
 
 ## How to revert
