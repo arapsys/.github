@@ -271,6 +271,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Every scratch directory goes under one root, removed on any exit.
+          scratch_root="$(mktemp -d)"
+          trap 'rm -rf "$scratch_root"' EXIT
           fail=0
           err() { printf '::error title=pr-check::%s\n' "$1"; fail=1; }
           ok() { printf 'ok    %s\n' "$1"; }
@@ -339,7 +342,7 @@ jobs:
           # Security-sensitive paths, matched with git's own gitignore rules.
           sensitive=false
           if [[ -f "$PATHS_FILE" ]]; then
-            scratch="$(mktemp -d)"
+            scratch="$(mktemp -d -p "$scratch_root")"
             git init -q "$scratch"
             matches="$(git -C "$scratch" -c core.excludesFile="$(realpath "$PATHS_FILE")" \
               check-ignore --no-index --stdin < "$FILES_FILE" || true)"
@@ -359,7 +362,7 @@ jobs:
           # Policy and code in separate pull requests. git exits 1 when
           # nothing matches; anything above that is an error, not a pass.
           if [[ -f "${POLICY_PATHS_FILE:-}" ]]; then
-            policy_scratch="$(mktemp -d)"
+            policy_scratch="$(mktemp -d -p "$scratch_root")"
             git init -q "$policy_scratch"
             # Blank lines dropped: git exits 128 on an empty path.
             changed_files="$(grep -v '^$' "$FILES_FILE" || true)"
@@ -411,7 +414,7 @@ jobs:
           counted=0 skipped=0
           ignored=""
           if [[ -f "$SIZE_IGNORE_FILE" ]]; then
-            sizes_scratch="$(mktemp -d)"
+            sizes_scratch="$(mktemp -d -p "$scratch_root")"
             git init -q "$sizes_scratch"
             ignored="$(cut -f3 "$SIZE_FILE" | git -C "$sizes_scratch" \
               -c core.excludesFile="$(realpath "$SIZE_IGNORE_FILE")" \
@@ -447,7 +450,7 @@ jobs:
           # Risk tier: report only, never sets fail. The first rule that
           # applies decides.
           changed="$(grep -v '^$' "$FILES_FILE" || true)"
-          risk_scratch="$(mktemp -d)"
+          risk_scratch="$(mktemp -d -p "$scratch_root")"
           git init -q "$risk_scratch"
           printf '%s\n' 'Migrations/' > "$risk_scratch/migrations"
           migrations="$(printf '%s\n' "$changed" | git -C "$risk_scratch" \
