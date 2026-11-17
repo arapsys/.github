@@ -33,6 +33,7 @@ on:
 
 permissions:
   contents: read
+  issues: read # pr-check requests it; the workflow can't start without it
   pull-requests: write
 
 jobs:
