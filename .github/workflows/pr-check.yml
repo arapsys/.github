@@ -23,7 +23,10 @@
 #   - its title type is fix and, under a tests-paths prefix, it removes more
 #     assertion or test-attribute lines than it adds, or adds a skip. A
 #     commented-out line counts as removed. Read from the files API's
-#     patches, as data; a test file with no patch gets a warning.
+#     patches, as data; a test file with no patch gets a warning;
+#   - with workflow-approval-label set, it changes .github/workflows/ and no
+#     issue it closes or is part of carries that label. Dependency bots in
+#     exempt-authors skip it, as they skip the template rules.
 # It reports size, never failing because of it: added plus deleted lines
 # from the PR files API, skipping paths in the caller's size-ignore-file
 # (gitignore syntax, read from the base branch). It sets one label, size/S
@@ -99,6 +102,10 @@ on:
         description: Space-separated path prefixes that count as code for the policy rule.
         type: string
         default: src/
+      workflow-approval-label:
+        description: A label that an issue the pull request closes or is part of must carry when it changes .github/workflows/. Empty turns the rule off.
+        type: string
+        default: ""
       tests-paths:
         description: Space-separated path prefixes whose assertions a fix pull request must keep.
         type: string
@@ -135,6 +142,8 @@ jobs:
           NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TESTS_PATHS: ${{ inputs.tests-paths }}
+          BODY: ${{ github.event.pull_request.body }}
+          APPROVAL_LABEL: ${{ inputs.workflow-approval-label }}
         shell: bash
         run: |
           set -euo pipefail
@@ -155,6 +164,19 @@ jobs:
                   | select(any(env.TESTS_PATHS | split(" ")[] | select(. != ""); . as $p | $f | startswith($p)))
                   | if .patch then "=== \($f)", .patch else "=== no-patch \($f)" end' \
             > "$RUNNER_TEMP/tests.patch"
+          # The labels of each issue the description closes or is part of,
+          # for the workflow-approval rule, only when it is on. An issue that
+          # can't be read gets no labels, so the rule fails rather than passes.
+          : > "$RUNNER_TEMP/issue-labels.tsv"
+          if [[ -n "$APPROVAL_LABEL" ]]; then
+            visible="$(printf '%s\n' "$BODY" | perl -0pe 's/<!--.*?-->//gs')"
+            issues="$(grep -Eio '(close[sd]?|fix(e[sd])?|resolve[sd]?|part of)[[:space:]]*:?[[:space:]]+#[0-9]+' <<<"$visible" \
+              | grep -Eo '[0-9]+$' | sort -un || true)"
+            for n in $issues; do
+              labels="$(gh api "repos/$REPO/issues/$n" --jq '[.labels[].name] | join(",")')" || labels=""
+              printf '%s\t%s\n' "$n" "$labels" >> "$RUNNER_TEMP/issue-labels.tsv"
+            done
+          fi
           # The workflows the PR adds or changes, at its head commit, for the
           # trigger-filter rule. Saved as data under numbered names.
           mkdir -p "$RUNNER_TEMP/workflows"
@@ -188,6 +210,8 @@ jobs:
           POLICY_PATHS_FILE: ${{ inputs.policy-paths-file }}
           CODE_PATHS: ${{ inputs.code-paths }}
           TESTS_PATCH_FILE: ${{ runner.temp }}/tests.patch
+          APPROVAL_LABEL: ${{ inputs.workflow-approval-label }}
+          ISSUE_LABELS_FILE: ${{ runner.temp }}/issue-labels.tsv
         shell: bash
         run: |
           set -euo pipefail
@@ -415,6 +439,19 @@ jobs:
             exit "$fail"
           fi
           body="${BODY//$'\r'/}"
+
+          # Workflow changes need the approval label on an issue the PR closes
+          # or is part of. A file counts by its new and its old name.
+          if [[ -n "${APPROVAL_LABEL:-}" ]] && grep -q '^\.github/workflows/' "$FILES_FILE"; then
+            approved="$(awk -F'\t' -v want="$APPROVAL_LABEL" '
+              { n = split($2, label, ","); for (i = 1; i <= n; i++) if (label[i] == want) print "#" $1 }' \
+              "$ISSUE_LABELS_FILE")"
+            if [[ -n "$approved" ]]; then
+              ok "workflow change approved by $(paste -sd, - <<<"$approved" | sed 's/,/, /g')"
+            else
+              err "This pull request changes .github/workflows/, but no issue it closes or is part of carries '$APPROVAL_LABEL'. Ask for the label on the issue, then edit the description to re-run this check."
+            fi
+          fi
 
           # An issue reference, so the PR shows under the issue's Development
           # section. A warning, never a failure. HTML comments (the

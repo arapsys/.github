@@ -41,6 +41,7 @@ run() {
   printf '%s' "${SIZES:-}" > "$work/sizes"
   printf '%s' "${DEPS:-}" > "$work/deps"
   printf '%s' "${TESTS_PATCH:-}" > "$work/tests.patch"
+  printf '%s' "${ISSUE_LABELS:-}" > "$work/issue-labels"
   : > "$work/output"
   : > "$work/summary"
   (
@@ -53,6 +54,7 @@ run() {
     WORKFLOWS_DIR="${WORKFLOWS:-$work/no-workflows}" \
     POLICY_PATHS_FILE="${POLICY:-policy}" CODE_PATHS="${CODE:-src/}" \
     TESTS_PATCH_FILE="$work/tests.patch" TESTS_PATHS="tests/" \
+    APPROVAL_LABEL="${APPROVAL-}" ISSUE_LABELS_FILE="$work/issue-labels" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -445,6 +447,41 @@ if [ -z "${TESTS_PATCH+set}" ]; then
   pass=$((pass + 1)); echo "ok    fix_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  fix_case leaked TESTS_PATCH into later tests"
+fi
+
+# Workflow changes need the approval label on a linked issue.
+# approval_case <name> <want> <want log text, or -> <files> <issue labels tsv> [label] [author]
+approval_case() {
+  local APPROVAL="${6-ci-approved}" ISSUE_LABELS="$5"
+  run "$1" "$2" - "$good_title" "Closes #1
+$all_ticked" "$4" "" "${7:-someone}"
+  if [ "$3" != - ]; then
+    if grep -qF -- "$3" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$1" "$3"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$1" "$3"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+approval_case "an approved workflow change passes" pass "workflow change approved by #120" \
+  ".github/workflows/pr.yml" $'120\tclaude-ready,ci-approved'
+approval_case "an unapproved workflow change fails" fail "no issue it closes or is part of carries 'ci-approved'" \
+  ".github/workflows/pr.yml" $'120\tclaude-ready'
+approval_case "a workflow change with no linked issue fails" fail "carries 'ci-approved'" ".github/workflows/pr.yml" ""
+approval_case "an issue that couldn't be read fails" fail "carries 'ci-approved'" ".github/workflows/pr.yml" $'7\t'
+approval_case "one approved issue of two is enough" pass "approved by #9" ".github/workflows/pr.yml" $'8\tbug\n9\tci-approved'
+approval_case "a look-alike label doesn't count" fail - ".github/workflows/pr.yml" $'120\tci-approved-later'
+approval_case "a workflow renamed away counts by its old name" fail - "ci/old.yml
+.github/workflows/old.yml" ""
+approval_case "a non-workflow change needs no label" pass - "src/A.cs" ""
+approval_case "a file beside the workflows folder needs no label" pass - ".github/zizmor.yml" ""
+approval_case "with no label configured the rule is off" pass - ".github/workflows/pr.yml" "" ""
+approval_case "a dependency bot is exempt" pass - ".github/workflows/pr.yml" "" ci-approved "renovate[bot]"
+if [ -z "${APPROVAL+set}" ] && [ -z "${ISSUE_LABELS+set}" ]; then
+  pass=$((pass + 1)); echo "ok    approval_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  approval_case leaked APPROVAL or ISSUE_LABELS into later tests"
 fi
 
 # Bots.
