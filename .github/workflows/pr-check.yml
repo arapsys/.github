@@ -19,7 +19,11 @@
 #   - it changes both a policy path and code. Policy paths are listed in the
 #     caller's policy-paths-file (gitignore syntax, read from the base
 #     branch); code is any other file under a code-paths prefix. A gate is
-#     never changed in the PR it verifies. With no policy file, no rule.
+#     never changed in the PR it verifies. With no policy file, no rule;
+#   - its title type is fix and, under a tests-paths prefix, it removes more
+#     assertion or test-attribute lines than it adds, or adds a skip. A
+#     commented-out line counts as removed. Read from the files API's
+#     patches, as data; a test file with no patch gets a warning.
 # It reports size, never failing because of it: added plus deleted lines
 # from the PR files API, skipping paths in the caller's size-ignore-file
 # (gitignore syntax, read from the base branch). It sets one label, size/S
@@ -95,6 +99,10 @@ on:
         description: Space-separated path prefixes that count as code for the policy rule.
         type: string
         default: src/
+      tests-paths:
+        description: Space-separated path prefixes whose assertions a fix pull request must keep.
+        type: string
+        default: tests/
 
 # pull-requests: write is for the security-sensitive, size and risk labels
 # and nothing else.
@@ -126,6 +134,7 @@ jobs:
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TESTS_PATHS: ${{ inputs.tests-paths }}
         shell: bash
         run: |
           set -euo pipefail
@@ -138,6 +147,14 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" \
             --jq '.[] | select(.filename | test("(^|/)(Directory\\.Packages\\.props|global\\.json)$")) | .patch // empty' \
             > "$RUNNER_TEMP/deps.patch"
+          # The patches of test files, for the fix rule: a "=== <path>" line,
+          # then the patch, or "=== no-patch <path>" when GitHub omits it.
+          # shellcheck disable=SC2016 # $f and $p are jq variables, not shell ones.
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" \
+            --jq '.[] | .filename as $f
+                  | select(any(env.TESTS_PATHS | split(" ")[] | select(. != ""); . as $p | $f | startswith($p)))
+                  | if .patch then "=== \($f)", .patch else "=== no-patch \($f)" end' \
+            > "$RUNNER_TEMP/tests.patch"
           # The workflows the PR adds or changes, at its head commit, for the
           # trigger-filter rule. Saved as data under numbered names.
           mkdir -p "$RUNNER_TEMP/workflows"
@@ -170,6 +187,7 @@ jobs:
           WORKFLOWS_DIR: ${{ runner.temp }}/workflows
           POLICY_PATHS_FILE: ${{ inputs.policy-paths-file }}
           CODE_PATHS: ${{ inputs.code-paths }}
+          TESTS_PATCH_FILE: ${{ runner.temp }}/tests.patch
         shell: bash
         run: |
           set -euo pipefail
@@ -208,6 +226,34 @@ jobs:
               fi
             done < "$WORKFLOWS_DIR/index.tsv"
             (( filtered )) || ok "no workflow filters a trigger by path"
+          fi
+
+          # A fix keeps its tests: count assertion and test-attribute lines
+          # removed and added under the tests paths, and skips added. A
+          # comment line counts on neither side, so commenting out an
+          # assertion removes it.
+          if [[ "$TITLE" =~ ^fix(\([^\)]*\))?!?: ]] && [[ -s "${TESTS_PATCH_FILE:-}" ]]; then
+            counts="$(awk '
+              /^=== / { next }
+              /^[-+]/ {
+                sign = substr($0, 1, 1); code = substr($0, 2)
+                if (code ~ /^[[:space:]]*(\/\/|\/\*|\*)/) next
+                kept = (code ~ /Assert\.|\[(Test|Fact|Theory|TestMethod)[],(]/)
+                skip = (code ~ /\[Skip[](]|\[Ignore[](]/)
+                if (sign == "-") { r += kept; u += skip } else { a += kept; s += skip }
+              }
+              END { print r + 0, a + 0, s + 0, u + 0 }' "$TESTS_PATCH_FILE")"
+            read -r removed added skipped unskipped <<<"$counts"
+            if (( removed > added )); then
+              err "This fix removes $removed assertion or test lines under ${TESTS_PATHS-tests/} and adds $added. A fix never removes, loosens or comments out a test. Put them back, or if this isn't a fix, change the title and give the reason in the description."
+            elif (( skipped > unskipped )); then
+              err "This fix skips $((skipped - unskipped)) more test(s) than it re-enables. A fix never skips a test."
+            else
+              ok "the fix keeps its tests: $removed assertion or test lines removed, $added added"
+            fi
+            while IFS= read -r missing; do
+              printf '::warning title=pr-check::%s\n' "GitHub gave no diff for ${missing#=== no-patch }, so the fix rule didn't check it."
+            done < <(grep '^=== no-patch ' "$TESTS_PATCH_FILE" || true)
           fi
 
           # Security-sensitive paths, matched with git's own gitignore rules.
