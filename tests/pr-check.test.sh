@@ -47,8 +47,10 @@ run() {
   printf '%s\n' "${CHANGED-$(grep -c . "$work/sizes" || true)}" > "$work/changed-files"
   : > "$work/output"
   : > "$work/summary"
+  rm -rf "$work/tmp"; mkdir "$work/tmp"
   (
     cd "$work" || exit 99
+    export TMPDIR="$work/tmp"
     TITLE="$4" BODY="$5" AUTHOR="${8:-someone}" \
     COMMITS_FILE="$work/commits" FILES_FILE="$work/files" \
     PATHS_FILE="${9:-paths}" GITHUB_OUTPUT="$work/output" \
@@ -64,6 +66,10 @@ run() {
   ) > "$work/log" 2>&1
   local code=$? got=pass
   [ "$code" = 0 ] || got=fail
+  # The step removes every scratch directory it makes, pass or fail.
+  if [ -n "$(ls -A "$work/tmp")" ]; then
+    got="$got, left $(ls -A "$work/tmp" | paste -sd' ' -) in TMPDIR"
+  fi
   local got_sensitive
   got_sensitive="$(sed -n 's/^sensitive=//p' "$work/output")"
   if [ "$got" = "$want" ] && { [ "$want_sensitive" = - ] || [ "$got_sensitive" = "$want_sensitive" ]; }; then
