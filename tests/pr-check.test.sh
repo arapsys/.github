@@ -42,6 +42,8 @@ run() {
   printf '%s' "${DEPS:-}" > "$work/deps"
   printf '%s' "${TESTS_PATCH:-}" > "$work/tests.patch"
   printf '%s' "${ISSUE_LABELS:-}" > "$work/issue-labels"
+  # GitHub's changed_files: by default, as many as sizes lists.
+  printf '%s\n' "${CHANGED-$(grep -c . "$work/sizes" || true)}" > "$work/changed-files"
   : > "$work/output"
   : > "$work/summary"
   (
@@ -55,6 +57,7 @@ run() {
     POLICY_PATHS_FILE="${POLICY:-policy}" CODE_PATHS="${CODE:-src/}" \
     TESTS_PATCH_FILE="$work/tests.patch" TESTS_PATHS="tests/" \
     APPROVAL_LABEL="${APPROVAL-}" ISSUE_LABELS_FILE="$work/issue-labels" \
+    CHANGED_FILES_FILE="$work/changed-files" WARN_FILES="${WARN-}" MAX_FILES="${MAX-}" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -482,6 +485,37 @@ if [ -z "${APPROVAL+set}" ] && [ -z "${ISSUE_LABELS+set}" ]; then
   pass=$((pass + 1)); echo "ok    approval_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  approval_case leaked APPROVAL or ISSUE_LABELS into later tests"
+fi
+
+# File count: GitHub's changed_files against the listed files, and the limits.
+# files_case <name> <want> <want log text, or -> <listed files> <changed_files> [warn] [max]
+files_case() {
+  local SIZES CHANGED="$5" WARN="${6-20}" MAX="${7-30}" i
+  SIZES="$(for ((i = 1; i <= $4; i++)); do printf '1\t0\tsrc/F%d.cs\n' "$i"; done)"
+  run "$1" "$2" - "$good_title" "Closes #1
+$all_ticked" "$(cut -f3 <<<"$SIZES")"
+  if [ "$3" != - ]; then
+    if grep -qF -- "$3" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$1" "$3"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$1" "$3"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+files_case "20 files passes quietly" pass "Risk: medium" 20 20
+files_case "21 files warns and is risk/high" pass "Risk: high, because the pull request changes 21 files, over 20" 21 21
+files_case "21 files says why" pass "over 20. Split it unless it is one mechanical change" 21 21
+files_case "30 files still passes" pass "changes 30 files, over 20" 30 30
+files_case "31 files fails" fail "changes 31 files, over the limit of 30. Split it into pull requests of 20 files or fewer" 31 31
+files_case "a cut-short list fails" fail "GitHub listed 3000 of the 3400 changed files" 3000 3400 "" ""
+files_case "a cut-short list fails with no limits set" fail "listed 5 of the 6" 5 6 "" ""
+files_case "an unreadable count fails" fail "count of changed files couldn't be read" 3 "" "" ""
+files_case "no limits set means no warning" pass "Risk: medium" 50 50 "" ""
+if [ -z "${CHANGED+set}" ] && [ -z "${WARN+set}" ] && [ -z "${MAX+set}" ]; then
+  pass=$((pass + 1)); echo "ok    files_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  files_case leaked CHANGED, WARN or MAX into later tests"
 fi
 
 # Bots.

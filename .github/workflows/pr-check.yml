@@ -26,7 +26,12 @@
 #     patches, as data; a test file with no patch gets a warning;
 #   - with workflow-approval-label set, it changes .github/workflows/ and no
 #     issue it closes or is part of carries that label. Dependency bots in
-#     exempt-authors skip it, as they skip the template rules.
+#     exempt-authors skip it, as they skip the template rules;
+#   - GitHub listed fewer files than the PR changes (the files API stops at
+#     3000 without an error), so every rule above saw only part of it;
+#   - with max-files set, it changes more files than that.
+# With warn-files set, a PR over it (and not over max-files) passes with a
+# warning and risk/high.
 # It reports size, never failing because of it: added plus deleted lines
 # from the PR files API, skipping paths in the caller's size-ignore-file
 # (gitignore syntax, read from the base branch). It sets one label, size/S
@@ -98,6 +103,14 @@ on:
         description: Policy paths that never change in the same pull request as code, gitignore syntax, read from the base branch.
         type: string
         default: .github/policy-paths
+      warn-files:
+        description: Changed files above which a pull request passes with a warning and risk/high. Empty turns the warning off.
+        type: string
+        default: ""
+      max-files:
+        description: Changed files above which a pull request fails. Empty turns the limit off.
+        type: string
+        default: ""
       code-paths:
         description: Space-separated path prefixes that count as code for the policy rule.
         type: string
@@ -181,6 +194,9 @@ jobs:
               printf '%s\t%s\n' "$n" "$labels" >> "$RUNNER_TEMP/issue-labels.tsv"
             done
           fi
+          # How many files the PR changes, by GitHub's own count, to check
+          # the files list wasn't cut short (it stops at 3000).
+          gh api "repos/$REPO/pulls/$NUMBER" --jq '.changed_files' > "$RUNNER_TEMP/changed-files.txt"
           # The workflows the PR adds or changes, at its head commit, for the
           # trigger-filter rule. Saved as data under numbered names.
           mkdir -p "$RUNNER_TEMP/workflows"
@@ -208,6 +224,9 @@ jobs:
           FILES_FILE: ${{ runner.temp }}/files.txt
           PATHS_FILE: ${{ inputs.paths-file }}
           SIZE_FILE: ${{ runner.temp }}/sizes.tsv
+          CHANGED_FILES_FILE: ${{ runner.temp }}/changed-files.txt
+          WARN_FILES: ${{ inputs.warn-files }}
+          MAX_FILES: ${{ inputs.max-files }}
           SIZE_IGNORE_FILE: ${{ inputs.size-ignore-file }}
           DEPS_FILE: ${{ runner.temp }}/deps.patch
           WORKFLOWS_DIR: ${{ runner.temp }}/workflows
@@ -338,6 +357,23 @@ jobs:
             fi
           fi
 
+          # File count. sizes.tsv has one line per file, under its new name.
+          listed="$(grep -c . "$SIZE_FILE" || true)"
+          changed_count="$(tr -dc '0-9' < "${CHANGED_FILES_FILE:-/dev/null}" 2>/dev/null || true)"
+          if [[ -z "$changed_count" ]]; then
+            err "GitHub's count of changed files couldn't be read, so a cut-short file list can't be ruled out."
+            changed_count="$listed"
+          elif (( listed < changed_count )); then
+            err "GitHub listed $listed of the $changed_count changed files (its files list stops at 3000), so these checks saw only part of the pull request. Split it."
+          fi
+          many_files=false
+          if [[ -n "${MAX_FILES:-}" ]] && (( changed_count > MAX_FILES )); then
+            err "This pull request changes $changed_count files, over the limit of $MAX_FILES. Split it into pull requests of ${WARN_FILES:-$MAX_FILES} files or fewer."
+          elif [[ -n "${WARN_FILES:-}" ]] && (( changed_count > WARN_FILES )); then
+            many_files=true
+            printf '::warning title=pr-check::%s\n' "This pull request changes $changed_count files, over $WARN_FILES. Split it unless it is one mechanical change. It is marked risk/high."
+          fi
+
           # Size: report only, never sets fail. Bots get a size too.
           counted=0 skipped=0
           ignored=""
@@ -418,6 +454,8 @@ jobs:
             risk=high; rule="touches a migration: $(head -1 <<<"$migrations")"
           elif [[ -n "$majors" ]]; then
             risk=high; rule="major version bump: $(head -1 <<<"$majors")"
+          elif $many_files; then
+            risk=high; rule="changes $changed_count files, over $WARN_FILES"
           elif $small && only '(\.md$|^docs/)'; then
             risk=low; rule="is documentation only, $size"
           elif $small && [[ "$AUTHOR" == "renovate[bot]" ]] && $deps_known \
