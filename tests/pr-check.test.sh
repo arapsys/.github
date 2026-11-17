@@ -60,6 +60,7 @@ run() {
     APPROVAL_LABEL="${APPROVAL-}" ISSUE_LABELS_FILE="$work/issue-labels" \
     CHANGED_FILES_FILE="$work/changed-files" WARN_FILES="${WARN-}" MAX_FILES="${MAX-}" \
     FOLLOWUPS_SECTION="${FOLLOWUPS-}" MEMORY_DIR="docs/project/memory.d/" ADDED_FILE="$work/added" \
+    LEFTOVERS_SECTION="${LEFTOVERS-}" DRAFT="${DRAFT_STATE-false}" LABELS="${LABELS_JSON-[]}" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -583,6 +584,59 @@ if [ -z "${FOLLOWUPS+set}" ] && [ -z "${ADDED+set}" ]; then
   pass=$((pass + 1)); echo "ok    fu_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  fu_case leaked FOLLOWUPS or ADDED into later tests"
+fi
+
+# Review leftovers: filled in once out of draft or labelled reviewed.
+# lo_case <name> <want> <want log text, or -> <section text, or - for none> [draft] [labels JSON] [author]
+lo_case() {
+  local LEFTOVERS="Review leftovers" DRAFT_STATE="${5-false}" LABELS_JSON="${6:-[]}" section=""
+  [ "$4" = - ] || section="## Review leftovers
+$4
+"
+  run "$1" "$2" - "$good_title" "Closes #1
+
+$section
+$all_ticked" "README.md" "" "${7:-someone}"
+  if [ "$3" != - ]; then
+    if grep -qF -- "$3" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$1" "$3"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$1" "$3"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+hint='<!-- "None", or one bullet per review finding left unfixed, each with its reason. -->'
+lo_case "None passes" pass "no review leftovers" "None"
+lo_case "none in any case passes" pass "no review leftovers" "- NONE."
+lo_case "a listed finding passes" pass "review leftovers listed" "- Rename x: out of scope, raised as #12"
+lo_case "prose passes" pass "review leftovers listed" "Kept the long name; it matches the API."
+lo_case "a missing section fails" fail "has no '## Review leftovers' section (out of draft)" -
+lo_case "only the template hint fails" fail "section is empty (out of draft)" "$hint"
+lo_case "an empty section fails" fail "section is empty" ""
+lo_case "an all-caps placeholder fails" fail "placeholder 'REVIEW_LEFTOVERS'" "REVIEW_LEFTOVERS"
+lo_case "a bracketed placeholder fails" fail "placeholder '{{REVIEW_LEFTOVERS}}'" "$hint
+{{REVIEW_LEFTOVERS}}"
+lo_case "TODO fails" fail "placeholder 'TODO'" "- TODO"
+lo_case "tbd: with text fails" fail "placeholder 'tbd: after round 2'" "tbd: after round 2"
+lo_case "a placeholder beside a finding fails" fail "placeholder 'REVIEW_LEFTOVERS'" "- Rename x: out of scope
+REVIEW_LEFTOVERS"
+lo_case "a word that starts with todo is not a placeholder" pass "review leftovers listed" "- Todos page left as is: no owner yet"
+lo_case "a capitalised word is not a placeholder" pass "review leftovers listed" "- Deferred"
+lo_case "a draft with a placeholder passes with a warning" pass "::warning title=pr-check::The '## Review leftovers' section still holds" \
+  "REVIEW_LEFTOVERS" true
+lo_case "a draft with no section passes with a warning" pass "::warning title=pr-check::The description has no" - true
+lo_case "a reviewed draft with a placeholder fails" fail "(labelled reviewed)" "REVIEW_LEFTOVERS" true '["size/S", "reviewed"]'
+lo_case "a reviewed draft with None passes" pass "no review leftovers" "None" true '["reviewed"]'
+lo_case "another label doesn't count as reviewed" pass "::warning title=pr-check::The '## Review leftovers' section still holds" "REVIEW_LEFTOVERS" true '["reviewed-later"]'
+lo_case "an empty draft state counts as out of draft" fail "(out of draft)" "TODO" ""
+lo_case "a dependency bot is exempt" pass - - false '[]' "renovate[bot]"
+run "with the leftovers rule off nothing is checked" pass - "$good_title" "Closes #1
+$all_ticked" "README.md"
+if [ -z "${LEFTOVERS+set}" ] && [ -z "${DRAFT_STATE+set}" ] && [ -z "${LABELS_JSON+set}" ]; then
+  pass=$((pass + 1)); echo "ok    lo_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  lo_case leaked LEFTOVERS, DRAFT_STATE or LABELS_JSON into later tests"
 fi
 
 # Bots.

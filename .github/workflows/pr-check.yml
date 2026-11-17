@@ -33,6 +33,13 @@
 #     coordinator to raise (raise: <intent>, which warns until it becomes
 #     #N), or a memory entry the PR adds has no memory: bullet. Dependency
 #     bots skip it;
+#   - with leftovers-section set, and the PR out of draft or labelled
+#     reviewed, the description has no section of that name, or it holds
+#     only HTML comments, or a placeholder (a line that is one all-caps
+#     token such as REVIEW_LEFTOVERS, or starts with TODO or TBD). "None"
+#     or any other text passes. A draft without the label gets a warning.
+#     Draft state and labels come from the event payload. Dependency bots
+#     skip it;
 #   - GitHub listed fewer files than the PR changes (the files API stops at
 #     3000 without an error), so every rule above saw only part of it;
 #   - with max-files set, it changes more files than that.
@@ -127,6 +134,10 @@ on:
         default: ""
       followups-section:
         description: The heading (without "## ") of the section in which every follow-up and open question must be linked. Empty turns the rule off.
+        type: string
+        default: ""
+      leftovers-section:
+        description: The heading (without "## ") of the section that lists review findings left unfixed, or "None". Checked once the pull request is out of draft or labelled reviewed. Empty turns the rule off.
         type: string
         default: ""
       memory-dir:
@@ -254,6 +265,9 @@ jobs:
           FOLLOWUPS_SECTION: ${{ inputs.followups-section }}
           MEMORY_DIR: ${{ inputs.memory-dir }}
           ADDED_FILE: ${{ runner.temp }}/added.txt
+          LEFTOVERS_SECTION: ${{ inputs.leftovers-section }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -569,6 +583,42 @@ jobs:
               for id in "${unlisted[@]}"; do
                 err "This pull request adds the memory entry $id, but '$heading' doesn't list it. Add a bullet ending in memory: $id."
               done
+            fi
+          fi
+
+          # Review leftovers: each review finding left unfixed with its reason,
+          # or "None". Enforced out of draft or once labelled reviewed; a
+          # draft without the label gets warnings. Unset DRAFT counts as out
+          # of draft, so the rule fails closed. HTML comments don't count.
+          if [[ -n "${LEFTOVERS_SECTION:-}" ]]; then
+            lo_heading="## $LEFTOVERS_SECTION"
+            lo_enforce=true lo_when="out of draft"
+            if [[ "${DRAFT:-false}" == true ]]; then
+              if jq -e 'any(.[]; . == "reviewed")' <<<"${LABELS:-[]}" > /dev/null; then
+                lo_when="labelled reviewed"
+              else
+                lo_enforce=false lo_when="a draft, so a warning until it leaves draft"
+              fi
+            fi
+            lo_report() {
+              if $lo_enforce; then err "$1"; else printf '::warning title=pr-check::%s\n' "$1"; fi
+            }
+            lo_fill="Write 'None', or each review finding left unfixed with its reason."
+            lo_body="$(printf '%s\n' "$body" | perl -0pe 's/<!--.*?-->//gs' | sed 's/[[:space:]]*$//')"
+            lo_items="$(awk -v h="$lo_heading" '/^## /{ on = ($0 == h); next } on && NF' <<<"$lo_body")"
+            lo_placeholder="$(sed -E 's/^[[:space:]]*([-*][[:space:]]+)?//' <<<"$lo_items" \
+              | grep -E -m1 -e '^[^[:alnum:]]*[[:upper:]][[:upper:][:digit:]_]+[^[:alnum:]]*$' \
+                  -e '^([Tt][Oo][Dd][Oo]|[Tt][Bb][Dd])([^[:alnum:]]|$)' || true)"
+            if ! grep -qxF -- "$lo_heading" <<<"$lo_body"; then
+              lo_report "The description has no '$lo_heading' section ($lo_when). Add it. $lo_fill"
+            elif [[ -z "$lo_items" ]]; then
+              lo_report "The '$lo_heading' section is empty ($lo_when). $lo_fill"
+            elif [[ "$(tr '[:upper:]' '[:lower:]' <<<"$lo_items" | sed -E 's/^[[:space:]]*([-*][[:space:]]+)?//; s/[.[:space:]]*$//')" == none ]]; then
+              ok "no review leftovers"
+            elif [[ -n "$lo_placeholder" ]]; then
+              lo_report "The '$lo_heading' section still holds the placeholder '$lo_placeholder' ($lo_when). $lo_fill"
+            else
+              ok "review leftovers listed"
             fi
           fi
 
