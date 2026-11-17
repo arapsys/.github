@@ -69,7 +69,8 @@ It fails a pull request when:
 - the title is not a Conventional Commit (`type(scope): description`), or runs over 72 characters;
 - a box under `## Checks` is unticked with no reason on the next line;
 - the pull request shows generated content (a commit co-authored by `noreply@anthropic.com`, or a "Generated with" line in the body) but the provenance box is unticked;
-- it touches a security-sensitive path and the security-sensitive box is unticked.
+- it touches a security-sensitive path and the security-sensitive box is unticked;
+- a workflow it adds or changes filters a trigger with `paths:` or `paths-ignore:`. A required check whose workflow doesn't run waits forever, so skip jobs inside the workflow instead. The file is fetched at the head commit and parsed with yq as data, never run. A file yq can't parse fails too.
 
 Security-sensitive paths are listed in `.github/security-sensitive-paths` in the calling repository, in gitignore syntax, and read from the base branch. A pull request that touches one gets the `security-sensitive` label, and loses it on a later push that no longer does. A repository with no list gets no label.
 

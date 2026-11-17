@@ -48,6 +48,7 @@ run() {
     PATHS_FILE="${9:-paths}" GITHUB_OUTPUT="$work/output" \
     SIZE_FILE="$work/sizes" SIZE_IGNORE_FILE="${SIZE_IGNORE:-size-ignore}" \
     GITHUB_STEP_SUMMARY="$work/summary" DEPS_FILE="$work/deps" \
+    WORKFLOWS_DIR="${WORKFLOWS:-$work/no-workflows}" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -251,6 +252,69 @@ if [ -z "${DEPS+set}" ]; then
   pass=$((pass + 1)); echo "ok    risk_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  risk_case leaked DEPS into later tests"
+fi
+
+# Trigger path filters in changed workflows.
+# workflow_case <name> <want: pass|fail> <want error text, or -> <file contents>...
+# Each contents argument becomes one changed workflow, .github/workflows/w<n>.yml.
+workflow_case() {
+  local name="$1" want="$2" text="$3" WORKFLOWS="$work/workflows" n=0 files=""
+  shift 3
+  rm -rf "$WORKFLOWS"; mkdir -p "$WORKFLOWS"; : > "$WORKFLOWS/index.tsv"
+  for contents in "$@"; do
+    n=$((n + 1))
+    printf '%s\n' "$contents" > "$WORKFLOWS/$n.yml"
+    printf '%s\t%s\n' "$n" ".github/workflows/w$n.yml" >> "$WORKFLOWS/index.tsv"
+    files+=".github/workflows/w$n.yml"$'\n'
+  done
+  run "$name" "$want" - "$good_title" "Closes #1
+$all_ticked" "$files"
+  if [ "$text" != - ]; then
+    if grep -qF -- "$text" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$name" "$text"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$name" "$text"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+clean='on:
+  pull_request:
+    types: [opened]
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: some/action@v1
+        with:
+          paths: src/'
+workflow_case "a pull_request paths filter fails" fail "w1.yml filters a trigger by path (pull_request.paths)" 'on:
+  pull_request:
+    paths: [src/**]'
+workflow_case "a push paths-ignore filter fails" fail "(push.paths-ignore)" 'on:
+  push:
+    branches: [main]
+    paths-ignore: [docs/**]'
+workflow_case "both filters on two events are named" fail "(pull_request.paths, push.paths-ignore)" 'on:
+  pull_request: {paths: [a]}
+  push: {paths-ignore: [b]}'
+workflow_case "a workflow with no filter passes" pass "no workflow filters a trigger by path" "$clean"
+workflow_case "paths: in a step input is not a trigger" pass - "$clean"
+workflow_case "a one-word trigger passes" pass - 'on: push'
+workflow_case "a list of triggers passes" pass - 'on: [push, pull_request]'
+workflow_case "an event with no settings passes" pass - 'on:
+  workflow_dispatch:
+  push:'
+workflow_case "a clean file beside a filtered one still fails" fail "w2.yml filters a trigger" "$clean" 'on:
+  pull_request:
+    paths: [x]'
+workflow_case "a file that isn't YAML fails" fail "could not be read as YAML" 'on: [push
+  : :'
+run "no changed workflow skips the rule" pass - "$good_title" "$all_ticked" "README.md"
+if [ -z "${WORKFLOWS+set}" ]; then
+  pass=$((pass + 1)); echo "ok    workflow_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  workflow_case leaked WORKFLOWS into later tests"
 fi
 
 # Bots.
