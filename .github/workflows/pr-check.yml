@@ -27,6 +27,11 @@
 #   - with workflow-approval-label set, it changes .github/workflows/ and no
 #     issue it closes or is part of carries that label. Dependency bots in
 #     exempt-authors skip it, as they skip the template rules;
+#   - with followups-section set, the description has no section of that
+#     name, or a line in it is neither "None" nor a bullet that links an
+#     issue (#N), a memory entry the PR adds (memory: <id>) or work for the
+#     coordinator to raise (raise: <intent>, which warns until it becomes
+#     #N). Dependency bots skip it;
 #   - GitHub listed fewer files than the PR changes (the files API stops at
 #     3000 without an error), so every rule above saw only part of it;
 #   - with max-files set, it changes more files than that.
@@ -119,6 +124,14 @@ on:
         description: A label that an issue the pull request closes or is part of must carry when it changes .github/workflows/. Empty turns the rule off.
         type: string
         default: ""
+      followups-section:
+        description: The heading (without "## ") of the section in which every follow-up and open question must be linked. Empty turns the rule off.
+        type: string
+        default: ""
+      memory-dir:
+        description: Where memory entries live, for the followups rule's "memory:" links.
+        type: string
+        default: docs/project/memory.d/
       tests-paths:
         description: Space-separated path prefixes whose assertions a fix pull request must keep.
         type: string
@@ -166,6 +179,8 @@ jobs:
           set -euo pipefail
           gh api --paginate "repos/$REPO/pulls/$NUMBER/commits" --jq '.[].commit.message' > "$RUNNER_TEMP/commits.txt"
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/files.txt"
+          # Files the PR adds, for the followups rule's memory: links.
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | select(.status == "added") | .filename' > "$RUNNER_TEMP/added.txt"
           # One line per file, under its new name: additions, deletions, path.
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[] | "\(.additions)\t\(.deletions)\t\(.filename)"' > "$RUNNER_TEMP/sizes.tsv"
           # The patches of the files that hold dependency versions, for the
@@ -235,6 +250,9 @@ jobs:
           TESTS_PATCH_FILE: ${{ runner.temp }}/tests.patch
           APPROVAL_LABEL: ${{ inputs.workflow-approval-label }}
           ISSUE_LABELS_FILE: ${{ runner.temp }}/issue-labels.tsv
+          FOLLOWUPS_SECTION: ${{ inputs.followups-section }}
+          MEMORY_DIR: ${{ inputs.memory-dir }}
+          ADDED_FILE: ${{ runner.temp }}/added.txt
         shell: bash
         run: |
           set -euo pipefail
@@ -492,6 +510,52 @@ jobs:
               ok "workflow change approved by $(paste -sd, - <<<"$approved" | sed 's/,/, /g')"
             else
               err "This pull request changes .github/workflows/, but no issue it closes or is part of carries '$APPROVAL_LABEL'. Ask for the label on the issue, then edit the description to re-run this check."
+            fi
+          fi
+
+          # Follow-ups and open questions: one section, every item linked to
+          # an issue, a memory entry this PR adds, or work for the coordinator
+          # to raise. HTML comments (the template's hints) don't count.
+          if [[ -n "${FOLLOWUPS_SECTION:-}" ]]; then
+            heading="## $FOLLOWUPS_SECTION"
+            fu_body="$(printf '%s\n' "$body" | perl -0pe 's/<!--.*?-->//gs' | sed 's/[[:space:]]*$//')"
+            if ! grep -qxF -- "$heading" <<<"$fu_body"; then
+              err "The description has no '$heading' section. Add it: 'None', or one bullet per follow-up or open question, each ending in #N, memory: <entry id> or raise: <intent>."
+            else
+              items="$(awk -v h="$heading" '/^## /{ on = ($0 == h); next } on && NF' <<<"$fu_body")"
+              fu_bad=0 raises=0
+              if [[ -z "$items" ]]; then
+                err "The '$heading' section is empty. Write 'None', or list each follow-up and open question."
+                fu_bad=1
+              elif [[ "$(tr '[:upper:]' '[:lower:]' <<<"$items" | sed -E 's/^[[:space:]]*([-*][[:space:]]+)?//; s/[.[:space:]]*$//')" == none ]]; then
+                ok "no follow-ups or open questions"
+              else
+                while IFS= read -r line; do
+                  if [[ ! "$line" =~ ^[[:space:]]*[-*][[:space:]] ]]; then
+                    err "In '$heading', '$line' isn't a bullet. List each item as '- ... #N', '- ... memory: <id>' or '- ... raise: <intent>'."
+                    fu_bad=1
+                  elif [[ "$line" =~ memory:[[:space:]]*([A-Za-z0-9._-]+) ]]; then
+                    id="${BASH_REMATCH[1]}" found=false
+                    # || [[ -n "$f" ]] keeps a last line that has no newline.
+                    while IFS= read -r f || [[ -n "$f" ]]; do
+                      [[ "$f" == "${MEMORY_DIR%/}/"*/"$id.md" ]] && found=true
+                    done < "${ADDED_FILE:-/dev/null}"
+                    if ! $found; then
+                      err "'$heading' links memory: $id, but this pull request adds no entry with that id under ${MEMORY_DIR%/}/."
+                      fu_bad=1
+                    fi
+                  elif [[ "$line" =~ raise:[[:space:]]*[^[:space:]] ]]; then
+                    raises=$((raises + 1))
+                  elif [[ ! "$line" =~ (^|[^[:alnum:]_])([[:alnum:]._-]+/[[:alnum:]._-]+)?#[0-9]+ ]]; then
+                    err "In '$heading', '$line' links nothing. End it with #N, memory: <entry id> or raise: <intent>."
+                    fu_bad=1
+                  fi
+                done <<<"$items"
+                if (( raises )); then
+                  printf '::warning title=pr-check::%s\n' "'$heading' has $raises raise: item(s) with no issue yet. The coordinator turns each into an issue and edits the line to #N."
+                fi
+                (( fu_bad )) || ok "every follow-up and open question is linked"
+              fi
             fi
           fi
 
