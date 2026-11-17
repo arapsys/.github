@@ -11,7 +11,11 @@
 #     noreply@anthropic.com, or a "Generated with" line in the description)
 #     and the "Generated content declared" box is unticked;
 #   - it touches a security-sensitive path and the "security-sensitive path"
-#     box is unticked.
+#     box is unticked;
+#   - a workflow it adds or changes filters a trigger with paths: or
+#     paths-ignore:. A required check whose workflow doesn't run waits
+#     forever, so skipping belongs inside the workflow. The file is fetched
+#     at the head commit and parsed with yq, as data, never run.
 # It reports size, never failing because of it: added plus deleted lines
 # from the PR files API, skipping paths in the caller's size-ignore-file
 # (gitignore syntax, read from the base branch). It sets one label, size/S
@@ -108,6 +112,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -120,6 +125,21 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$NUMBER/files" \
             --jq '.[] | select(.filename | test("(^|/)(Directory\\.Packages\\.props|global\\.json)$")) | .patch // empty' \
             > "$RUNNER_TEMP/deps.patch"
+          # The workflows the PR adds or changes, at its head commit, for the
+          # trigger-filter rule. Saved as data under numbered names.
+          mkdir -p "$RUNNER_TEMP/workflows"
+          : > "$RUNNER_TEMP/workflows/index.tsv"
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" \
+            --jq '.[] | select(.status != "removed") | select(.filename | test("^\\.github/workflows/[^/]+\\.ya?ml$")) | .filename' \
+            > "$RUNNER_TEMP/workflow-files.txt"
+          i=0
+          while IFS= read -r path; do
+            i=$((i + 1))
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/$REPO/contents/$(jq -rn --arg p "$path" '$p | split("/") | map(@uri) | join("/")')?ref=$HEAD_SHA" \
+              > "$RUNNER_TEMP/workflows/$i.yml"
+            printf '%s\t%s\n' "$i" "$path" >> "$RUNNER_TEMP/workflows/index.tsv"
+          done < "$RUNNER_TEMP/workflow-files.txt"
 
       - name: Check
         id: check
@@ -134,6 +154,7 @@ jobs:
           SIZE_FILE: ${{ runner.temp }}/sizes.tsv
           SIZE_IGNORE_FILE: ${{ inputs.size-ignore-file }}
           DEPS_FILE: ${{ runner.temp }}/deps.patch
+          WORKFLOWS_DIR: ${{ runner.temp }}/workflows
         shell: bash
         run: |
           set -euo pipefail
@@ -151,6 +172,27 @@ jobs:
           fi
           if (( ${#TITLE} > 72 )); then
             err "The title is ${#TITLE} characters long. Keep it to 72."
+          fi
+
+          # Trigger path filters in the workflows the PR adds or changes.
+          # Parsed with yq as data. A file yq can't read fails, so a broken
+          # file can't hide a filter.
+          if [[ -s "${WORKFLOWS_DIR:-}/index.tsv" ]]; then
+            filtered=0
+            while IFS=$'\t' read -r n path; do
+              # shellcheck disable=SC2016 # $event is a yq variable, not a shell one.
+              if ! filters="$(yq -r '.on | select(tag == "!!map") | to_entries[]
+                  | select(.value | tag == "!!map") | .key as $event | .value | keys[]
+                  | select(. == "paths" or . == "paths-ignore") | $event + "." + .' \
+                  "$WORKFLOWS_DIR/$n.yml" 2>&1)"; then
+                err "$path could not be read as YAML, so its triggers were not checked: $filters"
+                filtered=1
+              elif [[ -n "$filters" ]]; then
+                err "$path filters a trigger by path ($(paste -sd, - <<<"$filters" | sed 's/,/, /g')). A required check whose workflow doesn't run waits forever. Skip jobs inside the workflow instead."
+                filtered=1
+              fi
+            done < "$WORKFLOWS_DIR/index.tsv"
+            (( filtered )) || ok "no workflow filters a trigger by path"
           fi
 
           # Security-sensitive paths, matched with git's own gitignore rules.
