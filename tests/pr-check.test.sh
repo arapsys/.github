@@ -17,6 +17,7 @@ yq -r '.jobs.check.steps[] | select(.id == "check") | .run' \
 [ -s "$work/check.sh" ] || { echo "FAIL  the check step is empty"; exit 1; }
 
 printf '%s\n' '# test list' 'src/Gate/' 'tests/' 'docs/controls.md' > "$work/paths"
+printf '%s\n' '# policy' 'docs/controls.md' '*masking*.json' > "$work/policy"
 printf '%s\n' '# size ignore' 'packages.lock.json' '*.g.cs' 'tests/synthetic/' '**/Migrations/' > "$work/size-ignore"
 
 good_title='docs(engineering): add practices review'
@@ -48,6 +49,7 @@ run() {
     PATHS_FILE="${9:-paths}" GITHUB_OUTPUT="$work/output" \
     SIZE_FILE="$work/sizes" SIZE_IGNORE_FILE="${SIZE_IGNORE:-size-ignore}" \
     GITHUB_STEP_SUMMARY="$work/summary" DEPS_FILE="$work/deps" \
+    POLICY_PATHS_FILE="${POLICY:-policy}" CODE_PATHS="${CODE:-src/}" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -251,6 +253,56 @@ if [ -z "${DEPS+set}" ]; then
   pass=$((pass + 1)); echo "ok    risk_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  risk_case leaked DEPS into later tests"
+fi
+
+# Policy and code in separate pull requests.
+# policy_case <name> <want: pass|fail> <want log text, or -> <files> [policy file] [code prefixes]
+policy_case() {
+  local POLICY="${5:-policy}" CODE="${6:-src/}"
+  run "$1" "$2" - "$good_title" "Closes #1
+$all_ticked" "$4"
+  if [ "$3" != - ]; then
+    if grep -qF -- "$3" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$1" "$3"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$1" "$3"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+policy_case "policy plus code fails" fail "changes policy (docs/controls.md) and code (src/Gate/Rule.cs)" "docs/controls.md
+src/Gate/Rule.cs"
+policy_case "a masking file plus code fails" fail "policy (config/masking.rules.json)" "config/masking.rules.json
+src/Api/Upload.cs"
+policy_case "policy alone passes" pass "policy changes with no code" "docs/controls.md"
+policy_case "policy plus tests and docs passes" pass - "docs/controls.md
+tests/Gate/RuleTests.cs
+docs/engineering.md"
+policy_case "code alone passes" pass "no policy path touched" "src/Gate/Rule.cs"
+policy_case "a policy file under src/ alone passes" pass "policy changes with no code" "src/Masking/masking.json"
+policy_case "a policy file under src/ plus code fails" fail "code (src/Masking/Masker.cs)" "src/Masking/masking.json
+src/Masking/Masker.cs"
+policy_case "a renamed policy file counts by its old name" fail "policy (docs/controls.md)" "docs/control-list.md
+docs/controls.md
+src/A.cs"
+policy_case "a look-alike of src/ is not code" pass - "docs/controls.md
+srcgen/A.cs" policy "src/"
+policy_case "every code prefix counts" fail "code (app/A.cs)" "docs/controls.md
+app/A.cs" policy "src/ app/"
+policy_case "no policy file means no rule" pass - "docs/controls.md
+src/A.cs" missing-policy
+# A git that fails on the policy list: the rule must fail, not pass.
+mkdir -p "$work/bad-git"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'case "$*" in *"$POLICY_PATHS_FILE"*check-ignore*) exit 128 ;; esac' \
+  'exec "$REAL_GIT" "$@"' > "$work/bad-git/git"
+chmod +x "$work/bad-git/git"
+REAL_GIT="$(command -v git)" PATH="$work/bad-git:$PATH" \
+  policy_case "a git error on the policy list fails" fail "Could not match the changed files against" "docs/controls.md"
+if [ -z "${POLICY+set}" ] && [ -z "${CODE+set}" ]; then
+  pass=$((pass + 1)); echo "ok    policy_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  policy_case leaked POLICY or CODE into later tests"
 fi
 
 # Bots.

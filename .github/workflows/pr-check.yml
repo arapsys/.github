@@ -11,7 +11,11 @@
 #     noreply@anthropic.com, or a "Generated with" line in the description)
 #     and the "Generated content declared" box is unticked;
 #   - it touches a security-sensitive path and the "security-sensitive path"
-#     box is unticked.
+#     box is unticked;
+#   - it changes both a policy path and code. Policy paths are listed in the
+#     caller's policy-paths-file (gitignore syntax, read from the base
+#     branch); code is any other file under a code-paths prefix. A gate is
+#     never changed in the PR it verifies. With no policy file, no rule.
 # It reports size, never failing because of it: added plus deleted lines
 # from the PR files API, skipping paths in the caller's size-ignore-file
 # (gitignore syntax, read from the base branch). It sets one label, size/S
@@ -79,6 +83,14 @@ on:
         description: Paths that don't count toward the size label, gitignore syntax, read from the base branch.
         type: string
         default: .github/pr-size-ignore
+      policy-paths-file:
+        description: Policy paths that never change in the same pull request as code, gitignore syntax, read from the base branch.
+        type: string
+        default: .github/policy-paths
+      code-paths:
+        description: Space-separated path prefixes that count as code for the policy rule.
+        type: string
+        default: src/
 
 # pull-requests: write is for the security-sensitive, size and risk labels
 # and nothing else.
@@ -101,6 +113,7 @@ jobs:
           sparse-checkout: |
             ${{ inputs.paths-file }}
             ${{ inputs.size-ignore-file }}
+            ${{ inputs.policy-paths-file }}
           sparse-checkout-cone-mode: false
 
       - name: Read the pull request's commits and files
@@ -134,6 +147,8 @@ jobs:
           SIZE_FILE: ${{ runner.temp }}/sizes.tsv
           SIZE_IGNORE_FILE: ${{ inputs.size-ignore-file }}
           DEPS_FILE: ${{ runner.temp }}/deps.patch
+          POLICY_PATHS_FILE: ${{ inputs.policy-paths-file }}
+          CODE_PATHS: ${{ inputs.code-paths }}
         shell: bash
         run: |
           set -euo pipefail
@@ -171,6 +186,36 @@ jobs:
           fi
           if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
             echo "sensitive=$sensitive" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Policy and code in separate pull requests. git exits 1 when
+          # nothing matches; anything above that is an error, not a pass.
+          if [[ -f "${POLICY_PATHS_FILE:-}" ]]; then
+            policy_scratch="$(mktemp -d)"
+            git init -q "$policy_scratch"
+            policy_rc=0
+            policy="$(git -C "$policy_scratch" -c core.excludesFile="$(realpath "$POLICY_PATHS_FILE")" \
+              check-ignore --no-index --stdin < "$FILES_FILE")" || policy_rc=$?
+            if (( policy_rc > 1 )); then
+              err "Could not match the changed files against $POLICY_PATHS_FILE (git exited $policy_rc)."
+            else
+              code=""
+              read -ra prefixes <<<"${CODE_PATHS-src/}"
+              while IFS= read -r path; do
+                [[ -n "$path" ]] || continue
+                grep -qxF -- "$path" <<<"$policy" && continue
+                for prefix in "${prefixes[@]}"; do
+                  if [[ "$path" == "$prefix"* ]]; then code+="$path"$'\n'; break; fi
+                done
+              done < "$FILES_FILE"
+              if [[ -n "$policy" && -n "$code" ]]; then
+                err "This pull request changes policy ($(head -3 <<<"$policy" | paste -sd, - | sed 's/,/, /g')) and code ($(grep -v '^$' <<<"$code" | head -3 | paste -sd, - | sed 's/,/, /g')). Put the policy change in a pull request of its own: a gate is never changed in the change it verifies."
+              elif [[ -n "$policy" ]]; then
+                ok "policy changes with no code"
+              else
+                ok "no policy path touched"
+              fi
+            fi
           fi
 
           # Size: report only, never sets fail. Bots get a size too.
