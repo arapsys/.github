@@ -561,6 +561,21 @@ fu_case "a hint inside a comment is ignored" fail "section is empty" "<!-- e.g. 
 fu_case "one bad item among good ones fails" fail "links nothing" "- a #12
 - b raise: c
 - d"
+fu_case "an added entry with no memory: bullet fails" fail "adds the memory entry 2026-11-17-9-x-scope, but" \
+  "None" "$entry"
+fu_case "an added entry listed beside an issue passes" pass "every follow-up and open question is linked" \
+  "- a #12
+- b memory: 2026-11-17-9-x-scope" "$entry"
+fu_case "each unlisted entry is named" fail "adds the memory entry 2026-11-17-9-x-other" \
+  "- b memory: 2026-11-17-9-x-scope" "$entry
+docs/project/memory.d/pitfalls/2026-11-17-9-x-other.md"
+fu_case "a README added under memory.d is not an entry" pass "no follow-ups or open questions" \
+  "None" "docs/project/memory.d/README.md"
+fu_case "a file deeper than one folder is not an entry" pass "no follow-ups or open questions" \
+  "None" "docs/project/memory.d/context/sub/x.md"
+fu_case "a listed id doesn't cover a shorter id inside it" fail "adds the memory entry 2026-11-17-9-x, but" \
+  "- b memory: 2026-11-17-9-x-scope" "$entry
+docs/project/memory.d/context/2026-11-17-9-x.md"
 fu_case "a dependency bot is exempt" pass - - "" "renovate[bot]"
 run "with the followups rule off nothing is checked" pass - "$good_title" "Closes #1
 $all_ticked" "README.md"

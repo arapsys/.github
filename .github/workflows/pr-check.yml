@@ -31,7 +31,8 @@
 #     name, or a line in it is neither "None" nor a bullet that links an
 #     issue (#N), a memory entry the PR adds (memory: <id>) or work for the
 #     coordinator to raise (raise: <intent>, which warns until it becomes
-#     #N). Dependency bots skip it;
+#     #N), or a memory entry the PR adds has no memory: bullet. Dependency
+#     bots skip it;
 #   - GitHub listed fewer files than the PR changes (the files API stops at
 #     3000 without an error), so every rule above saw only part of it;
 #   - with max-files set, it changes more files than that.
@@ -523,7 +524,7 @@ jobs:
               err "The description has no '$heading' section. Add it: 'None', or one bullet per follow-up or open question, each ending in #N, memory: <entry id> or raise: <intent>."
             else
               items="$(awk -v h="$heading" '/^## /{ on = ($0 == h); next } on && NF' <<<"$fu_body")"
-              fu_bad=0 raises=0
+              fu_bad=0 raises=0 listed=" "
               if [[ -z "$items" ]]; then
                 err "The '$heading' section is empty. Write 'None', or list each follow-up and open question."
                 fu_bad=1
@@ -536,6 +537,7 @@ jobs:
                     fu_bad=1
                   elif [[ "$line" =~ memory:[[:space:]]*([A-Za-z0-9._-]+) ]]; then
                     id="${BASH_REMATCH[1]}" found=false
+                    listed+="$id "
                     # || [[ -n "$f" ]] keeps a last line that has no newline.
                     while IFS= read -r f || [[ -n "$f" ]]; do
                       [[ "$f" == "${MEMORY_DIR%/}/"*/"$id.md" ]] && found=true
@@ -556,6 +558,17 @@ jobs:
                 fi
                 (( fu_bad )) || ok "every follow-up and open question is linked"
               fi
+              # The other direction: every memory entry the PR adds is listed,
+              # so each one reaches the owner's review by name.
+              unlisted=()
+              while IFS= read -r f || [[ -n "$f" ]]; do
+                [[ "$f" == "${MEMORY_DIR%/}/"*/*.md && "${f#"${MEMORY_DIR%/}/"*/}" != */* ]] || continue
+                id="${f##*/}" && id="${id%.md}"
+                [[ "$listed" == *" $id "* ]] || unlisted+=("$id")
+              done < "${ADDED_FILE:-/dev/null}"
+              for id in "${unlisted[@]}"; do
+                err "This pull request adds the memory entry $id, but '$heading' doesn't list it. Add a bullet ending in memory: $id."
+              done
             fi
           fi
 
