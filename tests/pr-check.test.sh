@@ -42,6 +42,7 @@ run() {
   printf '%s' "${DEPS:-}" > "$work/deps"
   printf '%s' "${TESTS_PATCH:-}" > "$work/tests.patch"
   printf '%s' "${ISSUE_LABELS:-}" > "$work/issue-labels"
+  printf '%s' "${ADDED:-}" > "$work/added"
   # GitHub's changed_files: by default, as many as sizes lists.
   printf '%s\n' "${CHANGED-$(grep -c . "$work/sizes" || true)}" > "$work/changed-files"
   : > "$work/output"
@@ -58,6 +59,7 @@ run() {
     TESTS_PATCH_FILE="$work/tests.patch" TESTS_PATHS="tests/" \
     APPROVAL_LABEL="${APPROVAL-}" ISSUE_LABELS_FILE="$work/issue-labels" \
     CHANGED_FILES_FILE="$work/changed-files" WARN_FILES="${WARN-}" MAX_FILES="${MAX-}" \
+    FOLLOWUPS_SECTION="${FOLLOWUPS-}" MEMORY_DIR="docs/project/memory.d/" ADDED_FILE="$work/added" \
       bash "$work/check.sh"
   ) > "$work/log" 2>&1
   local code=$? got=pass
@@ -516,6 +518,56 @@ if [ -z "${CHANGED+set}" ] && [ -z "${WARN+set}" ] && [ -z "${MAX+set}" ]; then
   pass=$((pass + 1)); echo "ok    files_case leaves no state behind"
 else
   failures=$((failures + 1)); echo "FAIL  files_case leaked CHANGED, WARN or MAX into later tests"
+fi
+
+# Follow-ups and open questions: one section, every item linked.
+# fu_case <name> <want> <want log text, or -> <section text, or - for none> [added files] [author]
+fu_case() {
+  local FOLLOWUPS="Follow-ups and open questions" ADDED="${5:-}" section=""
+  [ "$4" = - ] || section="## Follow-ups and open questions
+$4
+"
+  run "$1" "$2" - "$good_title" "Closes #1
+
+$section
+$all_ticked" "README.md" "" "${6:-someone}"
+  if [ "$3" != - ]; then
+    if grep -qF -- "$3" "$work/log"; then
+      pass=$((pass + 1)); printf 'ok    %s (names %s)\n' "$1" "$3"
+    else
+      failures=$((failures + 1)); printf 'FAIL  %s\nwant the log to contain: %s\n' "$1" "$3"
+      sed 's/^/      /' "$work/log"
+    fi
+  fi
+}
+entry="docs/project/memory.d/context/2026-11-17-9-x-scope.md"
+fu_case "None passes" pass "no follow-ups or open questions" "None"
+fu_case "a bulleted None. passes" pass "no follow-ups or open questions" "- None."
+fu_case "a missing section fails" fail "has no '## Follow-ups and open questions' section" -
+fu_case "an empty section fails" fail "section is empty" ""
+fu_case "an issue link passes" pass "every follow-up and open question is linked" "- Cover unions in OUT-4 #168"
+fu_case "a cross-repo link passes" pass "every follow-up and open question is linked" "- Pin bump arapsys/.github#18"
+fu_case "an added memory entry passes" pass "every follow-up and open question is linked" \
+  "- Is .Length a leak? memory: 2026-11-17-9-x-scope" "$entry"
+fu_case "a memory id the PR doesn't add fails" fail "adds no entry with that id" \
+  "- Is .Length a leak? memory: 2026-11-17-9-x-other" "$entry"
+fu_case "a memory file outside memory.d doesn't count" fail "adds no entry with that id" \
+  "- x memory: 2026-11-17-9-x-scope" "docs/elsewhere/2026-11-17-9-x-scope.md"
+fu_case "a raise: item passes with a warning" pass "has 1 raise: item(s) with no issue yet" "- Add a .Length sanitizer raise: optional DAT-2 sanitizer"
+fu_case "an unlinked bullet fails" fail "links nothing" "- Someone should look at unions"
+fu_case "prose instead of bullets fails" fail "isn't a bullet" "We might want to widen OUT-5 later."
+fu_case "a #N inside a word doesn't count" fail "links nothing" "- see issue#12x"
+fu_case "a hint inside a comment is ignored" fail "section is empty" "<!-- e.g. - thing #12 -->"
+fu_case "one bad item among good ones fails" fail "links nothing" "- a #12
+- b raise: c
+- d"
+fu_case "a dependency bot is exempt" pass - - "" "renovate[bot]"
+run "with the followups rule off nothing is checked" pass - "$good_title" "Closes #1
+$all_ticked" "README.md"
+if [ -z "${FOLLOWUPS+set}" ] && [ -z "${ADDED+set}" ]; then
+  pass=$((pass + 1)); echo "ok    fu_case leaves no state behind"
+else
+  failures=$((failures + 1)); echo "FAIL  fu_case leaked FOLLOWUPS or ADDED into later tests"
 fi
 
 # Bots.
