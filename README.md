@@ -70,6 +70,7 @@ It fails a pull request when:
 - a box under `## Checks` is unticked with no reason on the next line;
 - the pull request shows generated content (a commit co-authored by `noreply@anthropic.com`, or a "Generated with" line in the body) but the provenance box is unticked;
 - it touches a security-sensitive path and the security-sensitive box is unticked;
+- a workflow it adds or changes filters a trigger with `paths:` or `paths-ignore:`. A required check whose workflow doesn't run waits forever, so skip jobs inside the workflow instead. The file is fetched at the head commit and parsed with yq as data, never run. A file yq can't parse fails too;
 - it changes both a policy path and code. A gate is never changed in the pull request it verifies, so policy goes in a pull request of its own. Policy paths are listed in `.github/policy-paths` in the calling repository, in gitignore syntax, read from the base branch (override with the `policy-paths-file` input). Code is any other changed file under a prefix in the `code-paths` input, `src/` by default. A file counts by its new and its old name. A repository with no policy list gets no rule.
 
 Security-sensitive paths are listed in `.github/security-sensitive-paths` in the calling repository, in gitignore syntax, and read from the base branch. A pull request that touches one gets the `security-sensitive` label, and loses it on a later push that no longer does. A repository with no list gets no label.
