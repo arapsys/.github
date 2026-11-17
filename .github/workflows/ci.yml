@@ -9,11 +9,13 @@ on:
   push:
     branches: [main]
 
-# pull-requests: write is for pr-check's security-sensitive label, and
-# security-events: write for security's SARIF upload; a reusable workflow
-# gets no more than its caller grants.
+# pull-requests: write is for pr-check's security-sensitive label, issues:
+# read for its workflow-approval rule, and security-events: write for
+# security's SARIF upload; a reusable workflow gets no more than its caller
+# grants.
 permissions:
   contents: read
+  issues: read
   pull-requests: write
   security-events: write
 

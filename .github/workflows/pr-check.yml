@@ -112,11 +112,15 @@ on:
         default: tests/
 
 # pull-requests: write is for the security-sensitive, size and risk labels
-# and nothing else.
+# and nothing else. issues: read is for the workflow-approval rule, which
+# reads the labels of the issues a pull request names: in a private
+# repository the token can't read an issue without it. The caller must
+# grant it too, or the workflow can't start.
 # On a pull request from a fork the token stays read-only and the label
 # step warns instead.
 permissions:
   contents: read
+  issues: read
   pull-requests: write
 
 jobs:
