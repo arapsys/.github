@@ -235,5 +235,31 @@ run "security.yml fixtures: a rule with no id is caught" "$work/noid" \
 run "security.yml fixtures: a rule file that is not YAML is caught" "$work/notyaml" \
   "$(err 'Could not read an id for every rule in this file.'; echo 'exit 1')" fixtures_wf
 
+# tool_overrides <workflow>: one env name per line, at workflow, job or step
+# level, that mise reads as a tool's version: MISE_<TOOL>_VERSION, other
+# than MISE_VERSION, which pins mise itself. MISE_CHECK_VERSION made mise
+# look for a tool named "check" and fail every install (arapsys/redd#166).
+# "ok" when there are none.
+tool_overrides() {
+  local names
+  names="$(yq -r '[.env, (.jobs[] | .env), (.jobs[] | .steps[]? | .env)] | .[] | select(. != null) | keys | .[]' "$1")" \
+    || { echo "yq failed"; return; }
+  names="$(printf '%s\n' "$names" | grep -E '^MISE_[A-Z0-9_]+_VERSION$')"
+  [ -n "$names" ] && printf '%s\n' "$names" || echo ok
+}
+run "security.yml: no env name is a mise tool version override" "$root/.github/workflows/security.yml" "ok" tool_overrides
+
+cat > "$work/override.yml" <<'EOF'
+env:
+  MISE_VERSION: 1
+  MISE_CHECK_VERSION: 2
+jobs:
+  check:
+    env: {MISE_YES: "1"}
+    steps: [{run: x, env: {MISE_NODE_VERSION: "22"}}]
+EOF
+run "fixture: a tool version override at any level is caught" "$work/override.yml" \
+  "$(printf '%s\n' MISE_CHECK_VERSION MISE_NODE_VERSION)" tool_overrides
+
 printf '\n%s passed, %s failed\n' "$pass" "$failures"
 [ "$failures" = 0 ]

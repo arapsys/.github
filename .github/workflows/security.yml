@@ -96,7 +96,9 @@ env:
   # The check job runs the repository's own tools, so it needs a mise as new
   # as the repository's min_version: arapsys/redd asks for 2026.11.0. The
   # scanner jobs stay on MISE_VERSION, whose installs are known to work.
-  MISE_CHECK_VERSION: 2026.11.5
+  # Not MISE_CHECK_VERSION: mise reads MISE_<TOOL>_VERSION as a version of a
+  # tool named <tool>, and fails the install (tests/security.test.sh).
+  CHECK_JOB_MISE_VERSION: 2026.11.5
   MISE_YES: "1"
 
 jobs:
@@ -128,7 +130,7 @@ jobs:
           global-json-file: global.json
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: ${{ env.MISE_CHECK_VERSION }}
+          version: ${{ env.CHECK_JOB_MISE_VERSION }}
       - name: mise run check
         shell: bash
         run: |
