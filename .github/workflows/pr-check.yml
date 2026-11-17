@@ -27,7 +27,7 @@
 # It reports size, never failing because of it: added plus deleted lines
 # from the PR files API, skipping paths in the caller's size-ignore-file
 # (gitignore syntax, read from the base branch). It sets one label, size/S
-# (up to 100), size/M (up to 400), size/L (up to 800) or size/XL, writes the
+# (up to 100), size/M (up to 200), size/L (up to 400) or size/XL, writes the
 # count to the job summary, and warns at L and XL. The count matches the
 # caller's own scripts/pr-size.sh where it has one: the files API diffs
 # against the merge base, follows renames and gives binary files 0 lines.
@@ -331,13 +331,13 @@ jobs:
             fi
           done < "$SIZE_FILE"
           if   (( counted <= 100 )); then size=size/S
-          elif (( counted <= 400 )); then size=size/M
-          elif (( counted <= 800 )); then size=size/L
+          elif (( counted <= 200 )); then size=size/M
+          elif (( counted <= 400 )); then size=size/L
           else size=size/XL
           fi
           echo "Size: $counted changed lines counted, $skipped skipped. Label $size."
           if [[ "$size" == size/L || "$size" == size/XL ]]; then
-            printf '::warning title=pr-check::%s\n' "This pull request is $size: $counted changed lines, over the 400-line budget. That is fine if the description says why. Otherwise consider splitting it."
+            printf '::warning title=pr-check::%s\n' "This pull request is $size: $counted changed lines, over the 200-line budget. That is fine if the description says why. Otherwise consider splitting it."
           fi
           if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
             echo "size=$size" >> "$GITHUB_OUTPUT"

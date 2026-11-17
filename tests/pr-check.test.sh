@@ -177,10 +177,12 @@ $all_ticked" "README.md" "" "${6:-someone}"
 size_case "no files is size/S"                     size/S  no  ""
 size_case "100 lines is still size/S"              size/S  no  "60 40 src/A.cs"
 size_case "101 lines is size/M"                    size/M  no  "60 41 src/A.cs"
-size_case "400 lines is still size/M"              size/M  no  "300 100 src/A.cs"
-size_case "401 lines is size/L and warns"          size/L  yes "300 101 src/A.cs"
-size_case "800 lines is still size/L"              size/L  yes "800 0 src/A.cs"
-size_case "801 lines is size/XL, warns, passes"    size/XL yes "801 0 src/A.cs"
+size_case "200 lines is still size/M"              size/M  no  "150 50 src/A.cs"
+size_case "201 lines is size/L and warns"          size/L  yes "150 51 src/A.cs"
+size_case "400 lines is still size/L"              size/L  yes "400 0 src/A.cs"
+size_case "401 lines is size/XL, warns, passes"    size/XL yes "401 0 src/A.cs"
+size_case "a 150-line PR is size/M"               size/M  no  "120 30 src/A.cs"
+size_case "a 250-line PR is size/L"               size/L  yes "200 50 src/A.cs"
 size_case "lines add up across files"              size/M  no  "60 0 src/A.cs
 50 0 src/B.cs"
 size_case "a 0/0 row adds nothing"                 size/S  no  "0 0 docs/diagram.png
@@ -190,7 +192,7 @@ size_case "a lock file is skipped"                 size/S  no  "900 0 src/App/pa
 size_case "generated code is skipped"              size/S  no  "500 0 obj/Api.g.cs"
 size_case "synthetic fixtures are skipped"         size/S  no  "500 0 tests/synthetic/base.xml"
 size_case "a nested Migrations folder is skipped"  size/S  no  "500 0 src/Data/Migrations/0001_Init.cs"
-size_case "a look-alike name is counted"           size/L  yes "500 0 tests/synthetic-old/base.xml"
+size_case "a look-alike name is counted"           size/L  yes "300 0 tests/synthetic-old/base.xml"
 size_case "a bot still gets a size"                size/M  no  "200 0 src/A.cs" "" "renovate[bot]"
 size_case "no ignore file counts everything"       size/XL yes "900 0 src/App/packages.lock.json" missing-ignore
 if [ -z "${SIZES+set}" ] && [ -z "${SIZE_IGNORE+set}" ]; then
