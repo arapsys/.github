@@ -93,6 +93,10 @@ env:
   # mise itself, which jdx/mise-action installs; unpinned, it takes the
   # latest release, and a mise release changed how the scanners install.
   MISE_VERSION: 2026.9.12
+  # The check job runs the repository's own tools, so it needs a mise as new
+  # as the repository's min_version: arapsys/redd asks for 2026.11.0. The
+  # scanner jobs stay on MISE_VERSION, whose installs are known to work.
+  MISE_CHECK_VERSION: 2026.11.5
   MISE_YES: "1"
 
 jobs:
@@ -109,9 +113,22 @@ jobs:
         with:
           # check:gitleaks scans the whole history.
           fetch-depth: 0
+      # With a mise.lock, install only what it pins: a tool it doesn't cover
+      # is refused, not resolved afresh (arapsys/redd#166).
+      - name: Install from mise.lock only
+        shell: bash
+        run: |
+          if [ -f mise.lock ]; then
+            echo "MISE_LOCKED=1" >> "$GITHUB_ENV"
+          fi
+      # The SDK global.json names, not whatever the runner image carries.
+      - if: hashFiles('global.json') != ''
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: ${{ env.MISE_VERSION }}
+          version: ${{ env.MISE_CHECK_VERSION }}
       - name: mise run check
         shell: bash
         run: |
