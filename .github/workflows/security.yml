@@ -13,7 +13,9 @@
 #   gitleaks  secrets in the pull request's commits, base..head.
 #   semgrep   Semgrep's community rules for C#, Go, YAML (GitHub Actions,
 #             Compose, Kubernetes) and Dockerfiles, from semgrep/semgrep-rules
-#             at a pinned commit.
+#             at a pinned commit, plus the repository's own rules in
+#             .semgrep/ when it has that folder. Those are tested first
+#             against their fixtures, then scanned with like the rest.
 #   trivy     `trivy fs`: vulnerable dependencies, misconfiguration and
 #             secrets in the working tree.
 #
@@ -238,7 +240,59 @@ jobs:
           install: false
           # See the header: the check job's cache is not theirs to restore.
           cache: false
-      - name: Scan with the community rules
+      - name: Test the repository's own rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d .semgrep ]; then
+            echo "No .semgrep/ folder, so there are no repository rules to test."
+            exit 0
+          fi
+          # Every rule file needs a fixture beside it with the same stem
+          # (rule.yaml and rule.cs, or rule.test.yaml for a YAML rule), and
+          # its fixtures must mark each of its rule ids at least once with
+          # `ruleid: <id>` and once with `ok: <id>`. semgrep --test passes a
+          # rule with no fixture, or with a fixture that has no ruleid:
+          # line, so a rule that never fires would pass it.
+          bad=0
+          while IFS= read -r rule; do
+            stem="$(basename "${rule%.*}")"
+            mapfile -t fixtures < <(find "$(dirname "$rule")" -maxdepth 1 -type f \
+              -name "$stem.*" ! -path "$rule")
+            if [ "${#fixtures[@]}" = 0 ]; then
+              echo "::error file=$rule,title=semgrep::This rule has no fixture beside it."
+              bad=1
+              continue
+            fi
+            # yq (mikefarah, on GitHub's Ubuntu runners) reads every rule's
+            # id. A file it cannot read, or with a rule it reads no id for,
+            # fails rather than pass unchecked.
+            if ! count="$(yq '.rules | length' "$rule")" \
+                || ! mapfile -t ids < <(yq -r '.rules[].id | select(. != null)' "$rule") \
+                || [ "$count" = 0 ] || [ "${#ids[@]}" != "$count" ]; then
+              echo "::error file=$rule,title=semgrep::Could not read an id for every rule in this file."
+              bad=1
+              continue
+            fi
+            for id in "${ids[@]}"; do
+              # The id as a literal, ending at a space, comma or line end,
+              # so a mark for no-x-extra does not count for no-x.
+              re="$(printf '%s' "$id" | sed 's/[][\.*^$+?(){}|/]/\\&/g')"
+              for mark in ruleid ok; do
+                if ! grep -Eq "\b$mark: *([^ ,]+, *)*$re([ ,]|$)" "${fixtures[@]}"; then
+                  echo "::error file=$rule,title=semgrep::Rule $id has no '$mark: $id' line in its fixture."
+                  bad=1
+                fi
+              done
+            done
+          done < <(find .semgrep -type f \( -name '*.yaml' -o -name '*.yml' \) \
+            ! -name '*.test.yaml' ! -name '*.test.yml')
+          [ "$bad" = 0 ]
+          # --test fails when a rule misses a ruleid: line or matches an
+          # ok: line.
+          mise install "pipx:semgrep@$SEMGREP_VERSION"
+          mise exec "pipx:semgrep@$SEMGREP_VERSION" -- semgrep --test --metrics=off .semgrep
+      - name: Scan with the community and repository rules
         id: scan
         shell: bash
         run: |
@@ -247,11 +301,21 @@ jobs:
           mkdir -p "$rules"
           curl -fsSL "https://github.com/semgrep/semgrep-rules/archive/$SEMGREP_RULES_SHA.tar.gz" \
             | tar -xz -C "$rules" --strip-components=1
+          # The repository's own rules, read from the pull request's
+          # checkout like .semgrepignore. Their ids keep their folder
+          # path, without the leading dot: semgrep.csharp.<id>.
+          local_rules=()
+          if [ -d .semgrep ]; then local_rules=(--config .semgrep); fi
           # yaml/ holds the GitHub Actions rules as well as Compose and
           # Kubernetes. .semgrepignore at the root is read when present.
+          # The root .semgrep/ is excluded from the scan: its fixtures match
+          # on purpose, and the step above has already tested them. The
+          # leading slash anchors it to the root; a bare .semgrep would
+          # also skip a .semgrep folder at any depth.
           mise install "pipx:semgrep@$SEMGREP_VERSION"
           mise exec "pipx:semgrep@$SEMGREP_VERSION" -- semgrep scan --metrics=off --quiet \
             --config "$rules/csharp" --config "$rules/go" --config "$rules/yaml" --config "$rules/dockerfile" \
+            "${local_rules[@]}" --exclude=/.semgrep \
             --sarif-output="$RUNNER_TEMP/raw.sarif" > /dev/null
           # A rule's id is prefixed with the dotted path of its config
           # directory; strip it, so alerts are named by rule and not by
