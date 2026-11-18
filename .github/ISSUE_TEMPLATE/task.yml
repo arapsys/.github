@@ -24,9 +24,12 @@ body:
     id: done
     attributes:
       label: Done when
-      description: Checks a reviewer can tick off. Include the tests that should pass.
+      description: |
+        The spec: at most five numbered checks, A1 to A5. A sixth means a second issue. Write each as `**A1** (kind) ...` and name one evidence kind: `test`, `run`, `cli`, `scan`, `live`, `doc`, `human` or `after-merge`. A check proved by a test or a run is written given/when/then with one concrete example. A guard also gets a negative twin. The checks are frozen at dispatch.
       placeholder: |
-        - [ ] ...
+        - [ ] **A1** (test) Given a config file with the key `port` set twice, when `check` runs, then it exits 1 and names `port`.
+        - [ ] **A2** (test) Given the same file with `port` set once, when `check` runs, then it exits 0.
+        - [ ] **A3** (doc) The README describes the duplicate-key rule.
     validations:
       required: true
   - type: textarea
