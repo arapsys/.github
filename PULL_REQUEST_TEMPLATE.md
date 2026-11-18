@@ -5,7 +5,11 @@ Closes #
 <!-- One or two lines: what changed and why. -->
 
 ## Verification
-<!-- What you ran and what it showed, or a link to the run. -->
+<!-- What you ran and what it showed, or a link to the run. Then one row per A-check in the issue's "Done when", filled before review: the evidence for that check (a test name, a command and its output, a link), or "not met: <reason>". A repository or issue without A-checks deletes the table. -->
+
+| Check | Evidence |
+|---|---|
+| A1 | |
 
 ## Follow-ups and open questions
 <!-- "None", or one bullet per follow-up or open question, each ending in a link: #<issue> for an existing issue, memory: <entry id> for any memory entry this PR adds (a decision, pitfall, context entry or open question, all of which JB settles at /consolidate), or raise: <one line of intent> for work the coordinator should turn into an issue. Nothing here as prose elsewhere in the description. -->
